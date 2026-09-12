@@ -53,7 +53,7 @@ workers 4, AMP, saída em H:/datasets/coco-runs/s-100
 ```
 
 Estimativa: **~1.9 dias**. Acompanhar com
-`Get-Content H:\datasets\coco-runs\s-100	rain.log -Tail 5`.
+`Get-Content H:/datasets/coco-runs/s-100/train.log -Tail 5`.
 
 **Se cair**, retomar com o mesmo comando mais `--resume` — está tudo em
 `TRAINING.md` §6. Não recomeçar do zero.
