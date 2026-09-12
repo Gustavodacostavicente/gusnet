@@ -12,10 +12,13 @@ dist/
 htmlcov/
 
 # Project
-datasets/
-data/
-runs/
-weights/
+# Anchored with a leading slash: an unanchored "data/" would also match
+# src/gusnet/data/, which silently dropped the whole package from the repo
+# and from the built wheel.
+/datasets/
+/data/
+/runs/
+/weights/
 *.pt
 *.pth
 *.onnx

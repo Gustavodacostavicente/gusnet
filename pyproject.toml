@@ -59,6 +59,11 @@ src = ["src", "tests"]
 select = ["E", "F", "I", "UP", "B", "SIM", "NPY"]
 ignore = ["B008", "E741"]
 
+[tool.ruff.lint.isort]
+# Stated explicitly rather than inferred from the layout, so import order is
+# identical on every platform and in CI.
+known-first-party = ["gusnet"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
