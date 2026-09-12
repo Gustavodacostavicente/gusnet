@@ -536,6 +536,99 @@ A checkpoint contains `format`, `gusnet_version`, `epoch`, `model`,
 
 ---
 
+## `gusnet.predict`
+
+### `PredictConfig`
+
+```python
+PredictConfig(
+    img_size=640,
+    conf_threshold=0.25,
+    iou_threshold=0.45,
+    max_det=300,
+    batch_size=8,
+    device="auto",
+    half=False,
+)
+```
+
+### `Predictor`
+
+```python
+Predictor(model, *, class_names=None, config=None)
+Predictor.from_checkpoint(path, *, config=None, prefer_ema=True)
+
+predictor.predict(images)  # list[np.ndarray] -> list[Detections]
+predictor.predict_one(image)  # np.ndarray -> Detections
+predictor.run(source)  # -> iterator of (name, image, detections)
+predictor.annotate(image, detections)  # -> np.ndarray
+```
+
+Images are `(H, W, 3)` uint8 **RGB**. Detections come back in each image's own
+pixel coordinates, never letterboxed ones.
+
+### `iter_source`
+
+```python
+iter_source(source)  # -> iterator of (name, image)
+```
+
+Accepts an image file, a directory of images, or a video. `VIDEO_SUFFIXES`
+lists the recognised video extensions.
+
+---
+
+## `gusnet.export`
+
+### `ExportWrapper`
+
+```python
+ExportWrapper(model)  # forward(images) -> (boxes, scores)
+```
+
+A GUSNet that returns tensors instead of a dict.
+
+### `SuppressedModel`
+
+```python
+SuppressedModel(core, conf_threshold=0.25, iou_threshold=0.45, max_det=300)
+# forward(images) -> (N, 6) of [x1, y1, x2, y2, score, class]
+```
+
+Scriptable by construction, which is what keeps `N` dynamic. Batch size 1 only.
+
+### `export_torchscript`
+
+```python
+export_torchscript(model, path, *, img_size=640, nms=False,
+                   conf_threshold=0.25, iou_threshold=0.45, max_det=300) -> Path
+```
+
+Bit-exact with PyTorch. With `nms=True` the network is traced and the
+suppression scripted around it.
+
+### `export_onnx`
+
+```python
+export_onnx(model, path, *, img_size=640, opset=17, dynamic_batch=False,
+            nms=False, conf_threshold=0.25, iou_threshold=0.45,
+            max_det=300) -> Path
+```
+
+Requires the `export` extra. `dynamic_batch` and `nms` cannot be combined.
+Agrees with PyTorch to about `1e-5`.
+
+### `benchmark`
+
+```python
+benchmark(model, *, img_size=640, batch_size=1, iterations=50,
+          warmup=10, device="auto", half=False) -> dict
+```
+
+Returns `ms_per_image`, `ms_per_batch`, `fps`, `batch_size`, `img_size`.
+
+---
+
 ## `gusnet.viz`
 
 ```python
@@ -570,7 +663,15 @@ gusnet train        [data options] [--model {n,s,m,l,x}] [--epochs N]
 gusnet val          [data options] --weights PATH [--batch-size N] [--conf F]
                     [--iou F] [--max-det N] [--workers N] [--device D]
                     [--half] [--no-ema]
-gusnet predict | export              # declared, not implemented yet
+gusnet predict      --weights PATH --source PATH [--imgsz N] [--conf F]
+                    [--iou F] [--max-det N] [--batch-size N] [--device D]
+                    [--half] [--no-ema] [--out DIR] [--no-save] [--fps F]
+gusnet export       --weights PATH [--format {onnx,torchscript}] [--imgsz N]
+                    [--opset N] [--dynamic] [--nms] [--conf F] [--iou F]
+                    [--out PATH] [--no-ema]
+gusnet benchmark    [--weights PATH | --model {n,s,m,l,x} --classes N]
+                    [--imgsz N] [--batch-size N] [--iterations N]
+                    [--warmup N] [--device D] [--half]
 ```
 
 `main(argv=None) -> int` is the entry point; `build_parser()` returns the

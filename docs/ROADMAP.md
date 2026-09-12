@@ -129,10 +129,33 @@ caixa, como distribuição discreta (DFL) em vez de regressão direta.
 > mAP50 e mAP50-95 diz exatamente o que se espera: acha os objetos, mas as
 > caixas não são justas.
 
-### Fase 8 — Inferência e export
-- [ ] `gusnet predict` (imagem, pasta, vídeo)
-- [ ] export ONNX (com e sem NMS no grafo) e TorchScript
-- [ ] benchmark de latência
+### Fase 8 — Inferência e export ✅
+- [x] `gusnet predict` — imagem, pasta ou vídeo; letterbox sem upscale,
+      caixas devolvidas nas coordenadas da imagem original, anotação em disco
+- [x] export TorchScript — **bit-exato** com o PyTorch
+- [x] export ONNX — diferença máxima 6e-5 nas caixas (reassociação de float
+      pelo otimizador de grafo, não erro)
+- [x] NMS dentro do grafo nos dois formatos, com contagem de detecções
+      **dinâmica** (verificado em 4 entradas diferentes)
+- [x] `gusnet benchmark` com warmup e `cuda.synchronize()`
+- [x] CI passou a instalar o extra `export`, então os testes de ONNX rodam
+
+> **Bug encontrado aqui, e era silencioso.** Traçar o modelo com NMS embutido
+> gerava um arquivo que carregava, rodava e devolvia um tensor com a forma
+> certa — de **zero detecções, para sempre**. O traço foi tirado em ruído
+> aleatório, nada passou do threshold, e o `torch.jit.trace` gravou "a resposta
+> tem zero linhas" como constante. Não há erro nem aviso; só aparece se o teste
+> perguntar algo que uma verificação de forma nunca pergunta: *rode em 4
+> entradas diferentes e confirme que as contagens não são todas iguais.*
+>
+> Corrigido traçando a rede e **scriptando** a supressão em volta (TorchScript),
+> e usando o exportador legado no ONNX (o dynamo não consegue representar saída
+> de tamanho dependente dos dados e falha explicitamente — comportamento melhor,
+> mas ainda precisa do caminho antigo para gerar um grafo que funcione).
+
+> Lição geral: quando a *forma* da saída depende dos *valores* da entrada,
+> tracing não é uma forma segura de capturar a função — e o modo de falha é o
+> silêncio, então o teste tem que ir atrás.
 
 ## Tamanhos da família (80 classes, 640px)
 
@@ -151,7 +174,24 @@ AMP. Para m/l, usar accumulate de gradiente ou resolução menor.
 
 ## Ordem de validação
 
-1. overfit de 1 imagem (loss → ~0)
+1. overfit de 1 imagem (loss → ~0) — **feito, está na suíte de testes**
 2. COCO128, 100 épocas → mAP alto (memorização, prova que o pipeline fecha)
 3. VOC ou COCO subset
 4. COCO 2017 completo
+
+## Depois do roteiro
+
+As 8 fases estão completas. O que falta não é código, é **treino de verdade**:
+tudo foi verificado em dados sintéticos e em overfit de 1 imagem. Uma corrida
+no COCO é o que transforma isto de implementação correta em detector utilizável,
+e nada no código substitui isso.
+
+Depois disso, na ordem em que fariam mais diferença:
+
+- treino multi-escala
+- DDP para multi-GPU
+- retomar de `last.pt` (o estado é salvo, a flag não está ligada)
+- assigner estático tipo ATSS no aquecimento, para o SimOTA ser usável desde o
+  passo 1
+- conferir a mAP própria contra o `pycocotools` num teste opcional
+- export TensorRT / OpenVINO em cima do grafo ONNX

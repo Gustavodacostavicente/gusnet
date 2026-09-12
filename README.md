@@ -9,11 +9,11 @@ GUSNet is an anchor-free, single-stage object detector written from scratch.
 It is licensed under **Apache-2.0**: use it in a commercial product, keep your
 own source closed, no paid license, no obligations beyond attribution.
 
-> **Status: it trains and it measures.** Data pipeline, network, label
-> assignment, losses, the training loop and COCO-style mAP evaluation are all
-> implemented and tested (roadmap phases 1-7). Inference and ONNX export are
-> phase 8, and there are no released weights yet. See
-> [`docs/ROADMAP.md`](docs/ROADMAP.md), and
+> **Status: complete and untrained.** Data pipeline, network, label assignment,
+> losses, training, COCO-style mAP evaluation, inference and export are all
+> implemented and tested — the eight-phase roadmap is done. What is missing is
+> a real training run: everything has been verified on synthetic data and by
+> overfitting single images, so **there are no released weights yet**. See
 > [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how it all works.
 
 ## Why this exists
@@ -103,7 +103,24 @@ mAP50-95 0.2790   mAP50 0.7471   mAP75 0.1518
 precision 1.0000   recall 0.7826
 ```
 
-Not implemented yet: `gusnet predict`, `gusnet export`.
+Run it on an image, a folder or a video:
+
+```bash
+gusnet predict --weights best.pt --source photo.jpg --conf 0.25 --out runs/predict
+```
+
+Export it, and measure it:
+
+```bash
+gusnet export    --weights best.pt --format onnx --imgsz 640      # or torchscript
+gusnet export    --weights best.pt --format onnx --nms            # NMS in the graph
+gusnet benchmark --weights best.pt --imgsz 640 --batch-size 1
+```
+
+TorchScript exports are bit-exact with PyTorch; ONNX agrees to about `1e-5`.
+With `--nms` the detection count stays genuinely dynamic in both formats — which
+is harder than it sounds, and is
+[explained here](docs/ARCHITECTURE.md#10-inference-and-export).
 
 ### Diagnostics
 
@@ -197,10 +214,11 @@ result = evaluate(model, val_dataset, EvalConfig(img_size=640, device="cuda"))
 result.map50_95, result.map50, result.ap_per_class
 ```
 
-Verified end to end: the test suite overfits a single image from scratch and
-checks the most confident box lands on the object, and an oracle model that
-reports the ground truth exactly must score mAP 1.0 through the real evaluation
-loop.
+Verified end to end. The test suite overfits a single image from scratch and
+checks the most confident box lands on the object; an oracle model that reports
+the ground truth exactly must score mAP 1.0 through the real evaluation loop;
+and every export is checked both for numerical agreement with PyTorch and for
+keeping its detection count dynamic.
 
 ## Documentation
 

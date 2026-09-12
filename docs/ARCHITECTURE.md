@@ -22,11 +22,12 @@ This is the design document. For the legal reasoning behind the project see
 7. [Losses (`gusnet.losses`)](#7-losses)
 8. [Training (`gusnet.train`)](#8-training)
 9. [Evaluation (`gusnet.eval`)](#9-evaluation)
-10. [Visualisation (`gusnet.viz`)](#10-visualisation)
-11. [Command line (`gusnet.cli`)](#11-command-line)
-12. [Testing strategy](#12-testing-strategy)
-13. [Things learned the hard way](#13-things-learned-the-hard-way)
-14. [What is not built yet](#14-what-is-not-built-yet)
+10. [Inference and export (`gusnet.predict`, `gusnet.export`)](#10-inference-and-export)
+11. [Visualisation (`gusnet.viz`)](#11-visualisation)
+12. [Command line (`gusnet.cli`)](#12-command-line)
+13. [Testing strategy](#13-testing-strategy)
+14. [Things learned the hard way](#14-things-learned-the-hard-way)
+15. [What comes next](#15-what-comes-next)
 
 ---
 
@@ -707,7 +708,92 @@ held-out metric.
 
 ---
 
-## 10. Visualisation
+## 10. Inference and export
+
+**Modules:** `gusnet/predict.py`, `gusnet/export.py`
+
+### 10.1 Inference
+
+Inference is the training pipeline with almost everything removed, and the few
+things that stay differ in ways that matter:
+
+* **no upscaling.** The letterbox runs with `scaleup=False` — enlarging a small
+  image adds no information and costs accuracy.
+* **a high confidence threshold.** Evaluation uses 0.001 to trace the whole
+  precision/recall curve; a person wants 0.25, not 300 boxes sorted by hope.
+* **boxes mapped back to the source image.** Everything the model says is in
+  letterboxed coordinates, and nothing outside `Predictor` should ever see
+  those.
+
+A folder is processed in batches even though the images have different shapes,
+because the letterbox makes them the same size before they are stacked — each
+one keeps its own ratio and padding for the trip back.
+
+`iter_source` accepts a file, a directory or a video and yields RGB frames.
+OpenCV's BGR is converted once, at the boundary, rather than being allowed to
+leak inward.
+
+### 10.2 Export, and the one hard part
+
+A deployment runtime wants a graph of tensor operations, not a Python object.
+Two things stand in the way.
+
+**The output is a dict** — convenient in Python, inexpressible in ONNX.
+`ExportWrapper` flattens it to `(boxes, scores)` and drops what inference does
+not need: the raw logits and the anchor points exist for the loss.
+
+**Suppression has a data-dependent output size**, and this is where export
+gets genuinely difficult. How many detections there are depends on the pixels,
+so a plain trace records whatever count the *example* input produced and freezes
+it. The result runs, returns tensors of the right rank, and is wrong for every
+other image — silently. Measured here:
+
+```
+torch.jit.trace(model_with_nms)  →  detections per input: [0, 0, 0]
+```
+
+Zero, forever, because the example was noise and nothing scored above the
+threshold. Nothing in that failure looks like a failure.
+
+The two paths solve it differently:
+
+| | Approach | Result |
+|---|---|---|
+| TorchScript | trace the network, then **script** the suppression around it | counts `[125, 134, 117, 121]` |
+| ONNX | the **legacy** tracing exporter, which lowers NMS to the ONNX `NonMaxSuppression` op | counts `[123, 123, 130, 122]` |
+
+Scripted code keeps real control flow and real dynamic shapes; traced code does
+not. And the current dynamo-based ONNX exporter cannot represent a
+data-dependent output size at all — it fails outright rather than producing
+something wrong, which is the better of the two behaviours but still needs the
+older path to get a working graph.
+
+Folding NMS in is **off by default** regardless: it freezes the thresholds into
+the file, and a threshold that can only be changed by re-exporting is a
+threshold nobody tunes.
+
+Fidelity against PyTorch, measured on the same input:
+
+| Format | Max difference in boxes | In scores |
+|---|---|---|
+| TorchScript | `0.0` (bit-exact) | `0.0` |
+| ONNX | `6.1e-05` | `4.0e-07` |
+
+The ONNX difference is the graph optimiser reassociating float arithmetic, not
+an error. Both are asserted by tests.
+
+### 10.3 Benchmarking
+
+`benchmark()` measures forward-pass latency. The warmup passes are not optional
+noise reduction: the first CUDA call initialises the context and cuDNN picks its
+convolution algorithms over the first few passes, so timing those measures the
+setup rather than the model. `torch.cuda.synchronize()` before stopping the
+clock, for the same reason — CUDA is asynchronous, and without it the timer
+measures how fast work can be queued.
+
+---
+
+## 11. Visualisation
 
 **Module:** `gusnet/viz.py`
 
@@ -726,7 +812,7 @@ rendered image.
 
 ---
 
-## 11. Command line
+## 12. Command line
 
 ```bash
 gusnet check-data   --root DATA --imgsz 640 --out runs/check.jpg
@@ -734,19 +820,21 @@ gusnet check-assign --root DATA --assigner tal --out runs/assign.jpg
 gusnet model-info   --model s --classes 80 --imgsz 640
 gusnet train        --root DATA --model s --epochs 300 --device cuda                     --val-split val --val-interval 5
 gusnet val          --root DATA --weights runs/train/best.pt
+gusnet predict      --weights best.pt --source photo.jpg --conf 0.25
+gusnet export       --weights best.pt --format onnx --imgsz 640 [--nms]
+gusnet benchmark    --model s --imgsz 640 --batch-size 1
 ```
 
-`predict` and `export` are declared so the interface is fixed, and exit with a
-message pointing at the roadmap rather than pretending to work.
+Every subcommand is implemented.
 
 The two `check-*` commands exist because every bug found in this project so far
 was found by looking at an image, not at a number.
 
 ---
 
-## 12. Testing strategy
+## 13. Testing strategy
 
-242 tests. The ones worth knowing about are not the shape checks.
+267 tests. The ones worth knowing about are not the shape checks.
 
 **Round trips.** A box converted to another format and back must be identical;
 a box through letterbox and `scale_boxes` must return to where it started.
@@ -774,9 +862,17 @@ mistake in the coordinate bookkeeping between letterboxed predictions and
 original-image ground truth shows up immediately — a perfect detector that
 scores 0.8 means the evaluator is wrong, not the model.
 
+**Exports must stay dynamic.** Both NMS export paths are run on four different
+inputs and the detection counts must differ. This is the only way that class of
+bug is visible: an export with a frozen count produces perfectly shaped, wrong
+answers.
+
+**Exports must agree with PyTorch.** TorchScript bit-exactly; ONNX within 1e-3.
+An export that runs but computes something else is worse than no export.
+
 ---
 
-## 13. Things learned the hard way
+## 14. Things learned the hard way
 
 Two real bugs, both found by running the thing rather than by reading it.
 
@@ -835,16 +931,38 @@ default that silently changes the *units* of a comparison is worse than no
 fallback at all. Better to have nothing to compare than to compare the wrong
 thing.
 
+### The export that always returned nothing
+
+Tracing the model with NMS folded in produced a file that ran, loaded, and
+returned a correctly shaped tensor — of zero detections, for every input
+forever. The trace had been taken on random noise, nothing scored above the
+threshold, and `torch.jit.trace` recorded "the answer has zero rows" as a
+constant.
+
+There is no error, no warning that survives being read, and no way to notice
+from the shapes. It only became visible because the test asked a question a
+shape check never does: *run this on four different inputs and confirm the
+counts are not all the same.*
+
+Fixed by scripting the suppression instead of tracing it, and by using the
+legacy exporter for the ONNX equivalent. The lesson: when a function's output
+*shape* depends on its input *values*, tracing is not a safe way to capture it —
+and the failure mode is silence, so the test has to go looking.
+
 ---
 
-## 14. What is not built yet
+## 15. What comes next
 
-**Phase 8 — inference and export.** `gusnet predict` over images, folders and
-video; ONNX and TorchScript export, with NMS optionally baked into the graph;
-latency benchmarks.
+The eight-phase roadmap is complete: GUSNet reads data, trains, measures itself,
+runs on real inputs and exports to two runtimes.
 
-**Not planned but sensible later:** multi-scale training, DDP for multi-GPU,
-resuming from `last.pt` (the state is saved, the flag is not wired), rectangular
-inference batching, an ATSS-style static warmup assigner so SimOTA becomes
-usable from step one, and a cross-check of the mAP implementation against
-`pycocotools` as an optional test.
+**The obvious next thing is weights.** Everything here has been verified on
+synthetic data and on overfitting a single image. A real COCO run is what turns
+this from a correct implementation into a usable detector, and nothing in the
+code can substitute for it.
+
+**Sensible after that:** multi-scale training; DDP for multi-GPU; resuming from
+`last.pt` (the state is saved, the flag is not wired); rectangular inference
+batching; an ATSS-style static warmup assigner so SimOTA becomes usable from
+step one; a cross-check of the mAP implementation against `pycocotools` as an
+optional test; and TensorRT or OpenVINO export on top of the ONNX graph.

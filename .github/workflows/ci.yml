@@ -27,17 +27,17 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync --extra dev --extra export
 
       # Every `uv run` re-syncs the environment to match the extras it is given,
       # so the extras have to be repeated or the dev tools are uninstalled.
       - name: Lint
         run: |
-          uv run --extra dev ruff check .
-          uv run --extra dev ruff format --check .
+          uv run --extra dev --extra export ruff check .
+          uv run --extra dev --extra export ruff format --check .
 
       - name: Test
-        run: uv run --extra dev pytest --cov=gusnet --cov-report=term-missing
+        run: uv run --extra dev --extra export pytest --cov=gusnet --cov-report=term-missing
 
   license-headers:
     runs-on: ubuntu-latest

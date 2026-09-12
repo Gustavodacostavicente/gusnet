@@ -21,9 +21,15 @@ Runtime dependencies and their licenses:
   - NumPy                   BSD-3-Clause    https://github.com/numpy/numpy
   - Pillow                  MIT-CMU         https://github.com/python-pillow/Pillow
   - OpenCV (opencv-python)  Apache-2.0      https://github.com/opencv/opencv-python
-  - pycocotools             BSD-2-Clause    https://github.com/ppwwyyxx/cocoapi
   - PyYAML                  MIT             https://github.com/yaml/pyyaml
   - tqdm                    MPL-2.0 / MIT   https://github.com/tqdm/tqdm
+
+Optional dependencies:
+
+  - pycocotools             BSD-2-Clause    (extra: eval)
+  - onnx                    Apache-2.0      (extra: export)
+  - onnxruntime             MIT             (extra: export)
+  - onnxscript              MIT             (extra: export)
 
 "YOLO" and "Ultralytics" are trademarks of Ultralytics Inc. GUSNet is not
 affiliated with, endorsed by, or derived from Ultralytics. Any mention of YOLO

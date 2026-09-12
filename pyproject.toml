@@ -28,7 +28,8 @@ dependencies = [
 
 [project.optional-dependencies]
 eval = ["pycocotools>=2.0.7"]
-export = ["onnx>=1.16", "onnxruntime>=1.18"]
+# onnxscript is required by torch's current ONNX exporter, not optional.
+export = ["onnx>=1.16", "onnxruntime>=1.18", "onnxscript>=0.2"]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
@@ -67,6 +68,17 @@ known-first-party = ["gusnet"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+filterwarnings = [
+    "error::RuntimeWarning",
+    # The export tests deliberately use TorchScript and the legacy ONNX
+    # exporter: they are the only paths that keep a data-dependent detection
+    # count dynamic. Their deprecation notices are expected, not actionable.
+    "ignore:.*torch.jit.script.*:FutureWarning",
+    "ignore:.*legacy TorchScript-based ONNX export.*:DeprecationWarning",
+    "ignore:.*will be removed.*:DeprecationWarning",
+    "ignore:.*dynamic_axes.*:UserWarning",
+    "ignore:.*from_dynamic_axes_to_dynamic_shapes.*:DeprecationWarning",
+]
 
 [tool.uv]
 # PyTorch CPU wheels by default; install CUDA wheels explicitly when training:
