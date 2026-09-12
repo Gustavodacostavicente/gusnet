@@ -1,0 +1,72 @@
+# SPDX-License-Identifier: Apache-2.0
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --extra dev --python ${{ matrix.python-version }}
+
+      - name: Lint
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+
+      - name: Test
+        run: uv run pytest --cov=gusnet --cov-report=term-missing
+
+  license-headers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Every source file must carry the SPDX tag; see PROVENANCE.md.
+      - name: Check SPDX headers
+        run: |
+          missing=$(grep -rL "SPDX-License-Identifier: Apache-2.0" \
+            --include="*.py" src tests || true)
+          if [ -n "$missing" ]; then
+            echo "Missing SPDX header in:"
+            echo "$missing"
+            exit 1
+          fi
+
+  dco:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Contributions are accepted under the Developer Certificate of Origin;
+      # see CONTRIBUTING.md. Every commit in the PR needs a sign-off.
+      - name: Check Signed-off-by
+        run: |
+          range="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+          failed=0
+          while read -r sha; do
+            if ! git log -1 --format=%B "$sha" | grep -qi "^Signed-off-by: .\+ <.\+@.\+>"; then
+              echo "Missing Signed-off-by on commit $sha"
+              failed=1
+            fi
+          done < <(git rev-list "$range")
+          exit $failed

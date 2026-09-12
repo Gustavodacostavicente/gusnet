@@ -1,0 +1,30 @@
+GUSNet
+Copyright 2026 Gustavo da Costa Vicente
+
+This product includes software developed by Gustavo da Costa Vicente.
+
+Licensed under the Apache License, Version 2.0. See the LICENSE file.
+
+--------------------------------------------------------------------------------
+Third-party attributions
+--------------------------------------------------------------------------------
+
+GUSNet is an independent, clean-room implementation. It does not contain code
+derived from any GPL- or AGPL-licensed project. Algorithms reimplemented from
+published papers, and code adapted from permissively licensed projects, are
+listed with their origin and license in PROVENANCE.md.
+
+Runtime dependencies and their licenses:
+
+  - PyTorch (torch)          BSD-3-Clause    https://github.com/pytorch/pytorch
+  - torchvision             BSD-3-Clause    https://github.com/pytorch/vision
+  - NumPy                   BSD-3-Clause    https://github.com/numpy/numpy
+  - Pillow                  MIT-CMU         https://github.com/python-pillow/Pillow
+  - OpenCV (opencv-python)  Apache-2.0      https://github.com/opencv/opencv-python
+  - pycocotools             BSD-2-Clause    https://github.com/ppwwyyxx/cocoapi
+  - PyYAML                  MIT             https://github.com/yaml/pyyaml
+  - tqdm                    MPL-2.0 / MIT   https://github.com/tqdm/tqdm
+
+"YOLO" and "Ultralytics" are trademarks of Ultralytics Inc. GUSNet is not
+affiliated with, endorsed by, or derived from Ultralytics. Any mention of YOLO
+in this project is descriptive (nominative) use only.
