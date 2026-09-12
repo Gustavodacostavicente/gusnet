@@ -2,9 +2,9 @@
 # Copyright 2026 Gustavo da Costa Vicente
 """Command line entry point.
 
-``check-data``, ``check-assign``, ``model-info`` and ``train`` are implemented.
-``val``, ``predict`` and ``export`` are declared but not written yet, so that
-``gusnet --help`` tells the truth about what the project can currently do.
+Everything except ``predict`` and ``export`` is implemented. Those two are
+declared so the interface is fixed, and exit with a message pointing at the
+roadmap rather than pretending to work.
 """
 
 from __future__ import annotations
@@ -19,8 +19,8 @@ from gusnet.models.detector import VARIANTS
 __all__ = ["main"]
 
 _NOT_READY = (
-    "{command!r} is not implemented yet. GUSNet can train (roadmap phases 1-6); "
-    "evaluation and export are phases 7-8. See docs/ROADMAP.md."
+    "{command!r} is not implemented yet. GUSNet can train and evaluate "
+    "(roadmap phases 1-7); inference and export are phase 8. See docs/ROADMAP.md."
 )
 
 
@@ -93,10 +93,28 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--seed", type=int, default=0)
     train.add_argument("--save-dir", type=Path, default=Path("runs/train"))
     train.add_argument("--log-interval", type=int, default=10, help="0 to silence steps")
+    train.add_argument("--val-split", help="split to validate on, e.g. val")
+    train.add_argument("--val-interval", type=int, default=1, help="epochs between validations")
     train.set_defaults(no_augment=False)
 
+    val = sub.add_parser("val", help="evaluate a checkpoint and report mAP")
+    _add_data_arguments(val)
+    val.add_argument("--weights", type=Path, required=True, help="checkpoint to evaluate")
+    val.add_argument("--batch-size", type=int, default=16)
+    val.add_argument(
+        "--conf", type=float, default=0.001, help="confidence floor (keep it low for mAP)"
+    )
+    val.add_argument("--iou", type=float, default=0.7, help="NMS IoU threshold")
+    val.add_argument("--max-det", type=int, default=300)
+    val.add_argument("--workers", type=int, default=0)
+    val.add_argument("--device", default="auto")
+    val.add_argument("--half", action="store_true", help="run in float16 on CUDA")
+    val.add_argument(
+        "--no-ema", action="store_true", help="evaluate the raw weights, not the average"
+    )
+    val.set_defaults(no_augment=True, seed=0)
+
     for name, help_text in (
-        ("val", "evaluate a checkpoint"),
         ("predict", "run inference on images or video"),
         ("export", "export a checkpoint to ONNX or TorchScript"),
     ):
@@ -223,6 +241,41 @@ def _model_info(args: argparse.Namespace) -> int:
     return 0
 
 
+def _val(args: argparse.Namespace) -> int:
+    from gusnet.eval import EvalConfig, evaluate
+    from gusnet.train import model_from_checkpoint
+
+    dataset = _build_dataset(args)
+    model, checkpoint = model_from_checkpoint(args.weights, prefer_ema=not args.no_ema)
+
+    if model.num_classes != dataset.num_classes:
+        raise SystemExit(
+            f"checkpoint has {model.num_classes} classes but the dataset has "
+            f"{dataset.num_classes}; they must match"
+        )
+
+    weights = "raw" if args.no_ema else "EMA"
+    print(f"{args.weights} (epoch {checkpoint.get('epoch', '?')}, {weights} weights)")
+    print(f"{len(dataset)} images, {dataset.num_classes} classes, {args.imgsz}px")
+    print()
+
+    evaluate(
+        model,
+        dataset,
+        EvalConfig(
+            batch_size=args.batch_size,
+            img_size=args.imgsz,
+            conf_threshold=args.conf,
+            iou_threshold=args.iou,
+            max_det=args.max_det,
+            workers=args.workers,
+            device=args.device,
+            half=args.half,
+        ),
+    )
+    return 0
+
+
 def _train(args: argparse.Namespace) -> int:
     from gusnet.assign import SimOTAAssigner, TaskAlignedAssigner
     from gusnet.losses import DetectionLoss
@@ -241,6 +294,14 @@ def _train(args: argparse.Namespace) -> int:
     )
     criterion = DetectionLoss(dataset.num_classes, reg_max=model.head.reg_max, assigner=assigner)
 
+    val_dataset = None
+    if args.val_split:
+        val_args = argparse.Namespace(**vars(args))
+        val_args.split = args.val_split
+        val_args.no_augment = True
+        val_dataset = _build_dataset(val_args)
+        print(f"validating on {len(val_dataset)} images from split {args.val_split!r}")
+
     config = TrainConfig(
         epochs=args.epochs,
         batch_size=args.batch_size,
@@ -256,10 +317,11 @@ def _train(args: argparse.Namespace) -> int:
         seed=args.seed,
         save_dir=args.save_dir,
         log_interval=args.log_interval,
+        val_interval=args.val_interval,
     )
 
     print(f"GUSNet-{args.model}: {model.num_parameters():,} parameters")
-    Trainer(model, dataset, config, criterion=criterion).train()
+    Trainer(model, dataset, config, criterion=criterion, val_dataset=val_dataset).train()
     return 0
 
 
@@ -269,6 +331,8 @@ def main(argv: list[str] | None = None) -> int:
         return _check_data(args)
     if args.command == "train":
         return _train(args)
+    if args.command == "val":
+        return _val(args)
     if args.command == "check-assign":
         return _check_assign(args)
     if args.command == "model-info":

@@ -339,3 +339,38 @@ def test_trainer_keeps_an_ema_that_differs_from_the_live_weights(
     live = trainer.model.backbone.stem.conv.weight
     averaged = trainer.ema.ema.backbone.stem.conv.weight
     assert not torch.allclose(live, averaged)
+
+
+def test_trainer_selects_best_by_map_when_validating(folder_dataset: Path, tmp_path: Path):
+    """With a validation set, `best.pt` must be chosen by mAP, not by loss.
+
+    The two live in the same metrics dict on different scales, so an epoch
+    without a validation result must not compete: otherwise a large early
+    training loss wins a maximisation and `best.pt` is the worst checkpoint.
+    """
+    dataset = DetectionDataset.from_folder(folder_dataset, "train", img_size=64, augment=True)
+    model = GUSNet.from_variant("n", num_classes=dataset.num_classes)
+    config = _short_config(tmp_path, epochs=4, val_interval=3)
+
+    trainer = Trainer(model, dataset, config, val_dataset=dataset)
+    history = trainer.train()
+
+    validated = [entry for entry in history if "mAP50-95" in entry]
+    assert validated, "no epoch was validated"
+    assert all(0.0 <= entry["mAP50-95"] <= 1.0 for entry in validated)
+
+    best = load_checkpoint(config.save_dir / "best.pt")
+    assert "mAP50-95" in best["metrics"]
+    assert best["metrics"]["mAP50-95"] == max(e["mAP50-95"] for e in validated)
+
+
+def test_trainer_validates_on_the_last_epoch_regardless_of_interval(
+    folder_dataset: Path, tmp_path: Path
+):
+    dataset = DetectionDataset.from_folder(folder_dataset, "train", img_size=64, augment=False)
+    model = GUSNet.from_variant("n", num_classes=dataset.num_classes)
+    config = _short_config(tmp_path, epochs=3, val_interval=10)
+
+    history = Trainer(model, dataset, config, val_dataset=dataset).train()
+    assert "mAP50-95" in history[-1]
+    assert "mAP50-95" not in history[0]

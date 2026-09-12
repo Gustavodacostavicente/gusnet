@@ -21,11 +21,12 @@ This is the design document. For the legal reasoning behind the project see
 6. [Label assignment (`gusnet.assign`)](#6-label-assignment)
 7. [Losses (`gusnet.losses`)](#7-losses)
 8. [Training (`gusnet.train`)](#8-training)
-9. [Visualisation (`gusnet.viz`)](#9-visualisation)
-10. [Command line (`gusnet.cli`)](#10-command-line)
-11. [Testing strategy](#11-testing-strategy)
-12. [Things learned the hard way](#12-things-learned-the-hard-way)
-13. [What is not built yet](#13-what-is-not-built-yet)
+9. [Evaluation (`gusnet.eval`)](#9-evaluation)
+10. [Visualisation (`gusnet.viz`)](#10-visualisation)
+11. [Command line (`gusnet.cli`)](#11-command-line)
+12. [Testing strategy](#12-testing-strategy)
+13. [Things learned the hard way](#13-things-learned-the-hard-way)
+14. [What is not built yet](#14-what-is-not-built-yet)
 
 ---
 
@@ -86,6 +87,10 @@ priors, and nothing to tune per dataset.
         │  gusnet.train.Trainer
         ▼
    AMP backward → clip → step → EMA → checkpoint
+        │
+        │  gusnet.eval  (validation, and gusnet val)
+        ▼
+   NMS → detections → match against ground truth → mAP
 ```
 
 Every arrow in that diagram is covered by tests, and the whole chain is verified
@@ -593,7 +598,116 @@ for epoch:
 
 ---
 
-## 9. Visualisation
+## 9. Evaluation
+
+**Module:** `gusnet/eval/`
+
+Until this existed there was no number to compare two runs by. The trainer had
+to pick `best.pt` by training loss, which keeps falling long after the model has
+stopped generalising.
+
+### 9.1 `nms.py` — dense predictions to a list of objects
+
+The head answers the same question at every grid point, so one object arrives
+described by a dozen overlapping boxes. Non-maximum suppression sorts by
+confidence, keeps the best box, discards everything overlapping it too much, and
+repeats.
+
+Three thresholds, and they are not interchangeable:
+
+| | Measuring mAP | Showing a person |
+|---|---|---|
+| `conf_threshold` | **0.001** | 0.25 |
+| `iou_threshold` | **0.7** | 0.45 |
+
+The confidence one matters most. mAP integrates the whole precision/recall
+curve, so cutting predictions at 0.25 truncates the curve and under-reports the
+metric, often by several points. And suppressing aggressively removes duplicates
+but also removes recall — which is half of what is being measured.
+
+NMS is **per class** by default: a car overlapping a person is two objects, not
+a duplicate. `class_agnostic=True` is available for datasets where the classes
+are competing descriptions of the same thing. `multi_label` lets one grid point
+emit several classes; off by default, since one box per point at its best class
+is right unless the dataset genuinely has overlapping labels.
+
+Suppression itself is `torchvision.ops.batched_nms`, which offsets each class
+into its own coordinate band so classes cannot suppress one another.
+
+### 9.2 `metrics.py` — mean average precision
+
+Implemented from the definition rather than imported, because almost every
+surprising number a detector produces is explained by one of its details.
+
+**The curve.** For one class at one IoU threshold: sort every prediction in the
+dataset by confidence, walk down the list, and mark each as a true positive if
+it matches a ground-truth box nothing better has already claimed. That traces a
+precision/recall curve — accepting lower-confidence predictions raises recall
+and lowers precision. AP is the area under it.
+
+**Why the curve is flattened first.** The raw curve is jagged; one lucky
+detection can push precision back up. AP uses the maximum precision at or beyond
+each recall level, which answers the question that actually matters — *if I need
+this much recall, what is the best precision available?* — and makes the number
+stable.
+
+**Why ten thresholds.** AP at IoU 0.50 barely rewards good localisation: a box
+can be visibly wrong and still count. COCO-style mAP averages AP over IoU 0.50
+to 0.95 in steps of 0.05, so a model that puts boxes *almost* in the right place
+scores well below one that puts them exactly right. That gap is large and
+informative — on the synthetic benchmark here, mAP50 0.75 against mAP50-95 0.28
+says plainly that the boxes are being found but not tightly.
+
+**Matching rules**, following COCO:
+
+* a detection can only claim an object of its own class;
+* each object can be claimed once, by the highest-confidence detection that
+  overlaps it enough — so a duplicate is a false positive, not a second hit;
+* a class with no ground truth anywhere contributes **no AP at all**, rather
+  than a zero that would drag the mean down with a class the data never tested.
+
+`average_precision` interpolates at 101 evenly spaced recall levels rather than
+integrating exactly, which is what makes the number comparable across datasets
+of different sizes.
+
+### 9.3 `evaluator.py` — the run loop
+
+`evaluate(model, dataset, config)` runs the model over a dataset and returns a
+`MetricResult`. Two things it does on your behalf:
+
+* **forces augmentation off.** Measuring a model on mosaics measures something
+  that will never be asked of it. This is a silent and serious mistake, so it is
+  not left to the caller to remember.
+* **maps everything back to original-image coordinates** before matching. IoU
+  happens to be invariant under the shared letterbox scale-and-pad, so this
+  changes no number — but every box it reports is then meaningful, and a whole
+  class of silent mismatches disappears.
+
+`detections_to_rows` serialises to COCO's `[x, y, width, height]` records, in
+one place rather than at every call site that writes results out.
+
+### 9.4 Validation inside training
+
+Pass `val_dataset` to `Trainer` and `best.pt` is selected by mAP instead of by
+training loss. The **EMA copy** is what gets evaluated — it is the one that will
+be deployed, and early on its BatchNorm statistics are the more settled of the
+two.
+
+A 30-epoch run on the synthetic set, validating every 10 epochs:
+
+```
+val  mAP50-95 0.0000
+val  mAP50-95 0.0441   ← best.pt
+val  mAP50-95 0.0139
+```
+
+Note that the last epoch is not the best one, while the training loss fell
+monotonically throughout. That is the entire argument for selecting by a
+held-out metric.
+
+---
+
+## 10. Visualisation
 
 **Module:** `gusnet/viz.py`
 
@@ -612,26 +726,27 @@ rendered image.
 
 ---
 
-## 10. Command line
+## 11. Command line
 
 ```bash
 gusnet check-data   --root DATA --imgsz 640 --out runs/check.jpg
 gusnet check-assign --root DATA --assigner tal --out runs/assign.jpg
 gusnet model-info   --model s --classes 80 --imgsz 640
-gusnet train        --root DATA --model s --epochs 300 --device cuda
+gusnet train        --root DATA --model s --epochs 300 --device cuda                     --val-split val --val-interval 5
+gusnet val          --root DATA --weights runs/train/best.pt
 ```
 
-`val`, `predict` and `export` are declared so the interface is fixed, and exit
-with a message pointing at the roadmap rather than pretending to work.
+`predict` and `export` are declared so the interface is fixed, and exit with a
+message pointing at the roadmap rather than pretending to work.
 
 The two `check-*` commands exist because every bug found in this project so far
 was found by looking at an image, not at a number.
 
 ---
 
-## 11. Testing strategy
+## 12. Testing strategy
 
-208 tests. The ones worth knowing about are not the shape checks.
+242 tests. The ones worth knowing about are not the shape checks.
 
 **Round trips.** A box converted to another format and back must be identical;
 a box through letterbox and `scale_boxes` must return to where it started.
@@ -653,9 +768,15 @@ single image and must (a) collapse its loss and (b) place its most confident box
 on the object, in eval mode, with confidence above 0.5. If the chain from data
 to gradient is broken anywhere, this fails.
 
+**An oracle for the evaluator.** A stub model that reports the ground truth
+exactly is run through the real evaluation loop and must score mAP 1.0. Any
+mistake in the coordinate bookkeeping between letterboxed predictions and
+original-image ground truth shows up immediately — a perfect detector that
+scores 0.8 means the evaluator is wrong, not the model.
+
 ---
 
-## 12. Things learned the hard way
+## 13. Things learned the hard way
 
 Two real bugs, both found by running the thing rather than by reading it.
 
@@ -698,13 +819,25 @@ The lesson generalises: a loss term that is *small* is not the same as a loss
 term that is *satisfied*, and a training curve that looks flat and low deserves
 suspicion, not celebration.
 
+### The best-checkpoint mix-up
+
+Wiring validation into the trainer, the first run finished with
+`best mAP50-95 11.1202` — a mAP above 1, which is impossible.
+
+With `val_interval=5`, epochs in between produce no mAP, and the selection code
+fell back to the training loss for those. Selecting the *maximum* then compared
+two quantities on different scales, and epoch 1's loss of 11.12 beat every real
+mAP. `best.pt` was the worst checkpoint of the run.
+
+The fix is that epochs without a validation result simply do not compete. The
+general lesson is narrower than the previous two but no less useful: a fallback
+default that silently changes the *units* of a comparison is worse than no
+fallback at all. Better to have nothing to compare than to compare the wrong
+thing.
+
 ---
 
-## 13. What is not built yet
-
-**Phase 7 — evaluation.** NMS (`torchvision.ops.batched_nms`), COCO mAP through
-`pycocotools`, and `gusnet val`. Until this exists there is no number to compare
-runs by; the trainer selects `best.pt` by training loss, which is a placeholder.
+## 14. What is not built yet
 
 **Phase 8 — inference and export.** `gusnet predict` over images, folders and
 video; ONNX and TorchScript export, with NMS optionally baked into the graph;
@@ -712,5 +845,6 @@ latency benchmarks.
 
 **Not planned but sensible later:** multi-scale training, DDP for multi-GPU,
 resuming from `last.pt` (the state is saved, the flag is not wired), rectangular
-inference batching, and an ATSS-style static warmup assigner so SimOTA becomes
-usable from step one.
+inference batching, an ATSS-style static warmup assigner so SimOTA becomes
+usable from step one, and a cross-check of the mAP implementation against
+`pycocotools` as an optional test.

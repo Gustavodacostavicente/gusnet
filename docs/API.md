@@ -346,6 +346,107 @@ sum to `total`.
 
 ---
 
+## `gusnet.eval`
+
+### `non_max_suppression`
+
+```python
+non_max_suppression(output, *, conf_threshold=0.25, iou_threshold=0.45,
+                    max_det=300, max_nms=30000,
+                    class_agnostic=False, multi_label=False) -> list[Detections]
+```
+
+`output` is a `DetectionOutput` (or any mapping with `boxes` `(B, A, 4)` and
+`scores` `(B, A, C)`). Returns one `Detections` per image, sorted by descending
+score. Use `conf_threshold=0.001, iou_threshold=0.7` when measuring mAP and the
+defaults when showing results to a person.
+
+### `Detections`
+
+```python
+Detections(boxes, scores, labels)  # (N,4) xyxy, (N,), (N,) int64
+len(detections)
+detections.to(device)
+detections.filter(min_score)
+detections.scale_to_original(ratio, pad, orig_shape)
+```
+
+### `GroundTruth`
+
+```python
+GroundTruth(boxes, labels)  # (N,4) xyxy, (N,) int64
+```
+
+Must be in the **same coordinate space** as the detections it is matched
+against.
+
+### `MeanAveragePrecision`
+
+```python
+MeanAveragePrecision(num_classes, *, iou_thresholds=DEFAULT_IOU_THRESHOLDS)
+metric.update(detections, truth)  # one image at a time
+metric.compute()  # -> MetricResult
+metric.reset()
+```
+
+`DEFAULT_IOU_THRESHOLDS` is COCO's `(0.5, 0.55, ..., 0.95)`.
+
+### `MetricResult`
+
+| Attribute | Meaning |
+|---|---|
+| `map50_95` | mAP averaged over IoU 0.50:0.95 — the headline number |
+| `map50` | mAP at IoU 0.50 |
+| `map75` | mAP at IoU 0.75 |
+| `precision`, `recall` | at the best-F1 point of the IoU 0.50 curve |
+| `ap_per_class` | `{class index: AP averaged over thresholds}` |
+| `num_images`, `num_objects`, `num_detections` | counts |
+
+```python
+result.items()  # the scalars, ready to log
+result.format(class_names)  # a printable summary table
+```
+
+### `average_precision`
+
+```python
+average_precision(recalls, precisions) -> float
+```
+
+Area under one precision/recall curve: made monotonically non-increasing, then
+sampled at 101 evenly spaced recall levels.
+
+### `evaluate` and `EvalConfig`
+
+```python
+EvalConfig(
+    batch_size=16,
+    img_size=640,
+    conf_threshold=0.001,
+    iou_threshold=0.7,
+    max_det=300,
+    workers=0,
+    device="auto",
+    half=False,
+    verbose=True,
+)
+
+evaluate(model, dataset, config=None) -> MetricResult
+```
+
+Forces `dataset.augment = False`, and maps both predictions and ground truth
+back to original-image coordinates before matching.
+
+### `detections_to_rows`
+
+```python
+detections_to_rows(detections, image_id) -> list[dict]
+```
+
+COCO-style records with `bbox` as `[x, y, width, height]`.
+
+---
+
 ## `gusnet.train`
 
 ### `TrainConfig`
@@ -368,6 +469,9 @@ TrainConfig(
     amp=True,
     ema_decay=0.9999,
     ema_tau=2000.0,
+    val_interval=1,
+    eval_conf_threshold=0.001,
+    eval_iou_threshold=0.7,
     workers=0,
     device="auto",
     seed=0,
@@ -381,16 +485,19 @@ Methods: `resolved_device()`, `as_dict()`.
 ### `Trainer`
 
 ```python
-Trainer(model, dataset, config=None, *, criterion=None)
+Trainer(model, dataset, config=None, *, criterion=None, val_dataset=None)
 history = trainer.train()     # list of per-epoch metric dicts
 ```
 
 Attributes: `model`, `ema`, `optimizer`, `loader`, `history`, `device`,
-`amp_enabled`. Each history entry holds `total`, `cls`, `box`, `dfl`, `fg`,
-`lr`, `seconds`.
+`amp_enabled`, `val_dataset`. Each history entry holds `total`, `cls`, `box`,
+`dfl`, `fg`, `lr`, `seconds`, plus `mAP50-95`, `mAP50`, `mAP75`, `precision`
+and `recall` on epochs that were validated.
 
 Writes `save_dir/last.pt` (with optimiser state, resumable) every epoch and
-`save_dir/best.pt` (EMA weights, deployable) when the loss improves.
+`save_dir/best.pt` (EMA weights, deployable) when the model improves — by
+**mAP** when `val_dataset` is given, and by training loss otherwise. Epochs
+that were not validated never compete for `best.pt`.
 
 ### `ModelEMA`
 
@@ -457,9 +564,13 @@ gusnet model-info   [--model {n,s,m,l,x}] [--classes N] [--imgsz N]
 gusnet train        [data options] [--model {n,s,m,l,x}] [--epochs N]
                     [--batch-size N] [--optimizer {sgd,adamw}] [--lr0 F]
                     [--weight-decay F] [--warmup-epochs F] [--close-mosaic N]
-                    [--assigner {tal,simota}] [--workers N] [--device D]
-                    [--no-amp] [--seed N] [--save-dir DIR] [--log-interval N]
-gusnet val | predict | export        # declared, not implemented yet
+                    [--assigner {tal,simota}] [--val-split S] [--val-interval N]
+                    [--workers N] [--device D] [--no-amp] [--seed N]
+                    [--save-dir DIR] [--log-interval N]
+gusnet val          [data options] --weights PATH [--batch-size N] [--conf F]
+                    [--iou F] [--max-det N] [--workers N] [--device D]
+                    [--half] [--no-ema]
+gusnet predict | export              # declared, not implemented yet
 ```
 
 `main(argv=None) -> int` is the entry point; `build_parser()` returns the

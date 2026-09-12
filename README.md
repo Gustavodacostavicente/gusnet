@@ -9,10 +9,10 @@ GUSNet is an anchor-free, single-stage object detector written from scratch.
 It is licensed under **Apache-2.0**: use it in a commercial product, keep your
 own source closed, no paid license, no obligations beyond attribution.
 
-> **Status: it trains.** Data pipeline, network, label assignment, losses and
-> the training loop are all implemented and tested (roadmap phases 1-6).
-> COCO-style mAP evaluation, inference with NMS and ONNX export are phases 7-8,
-> so there are no released weights yet. See
+> **Status: it trains and it measures.** Data pipeline, network, label
+> assignment, losses, the training loop and COCO-style mAP evaluation are all
+> implemented and tested (roadmap phases 1-7). Inference and ONNX export are
+> phase 8, and there are no released weights yet. See
 > [`docs/ROADMAP.md`](docs/ROADMAP.md), and
 > [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how it all works.
 
@@ -83,10 +83,27 @@ or on COCO-style annotations:
 gusnet train --coco-images datasets/coco/train2017              --coco-annotations datasets/coco/annotations/instances_train2017.json
 ```
 
-Checkpoints land in `runs/train/` as `last.pt` (resumable) and `best.pt`
-(deployable, EMA weights, no optimiser state).
+Add a validation split and `best.pt` is selected by mAP instead of by training
+loss:
 
-Not implemented yet: `gusnet val`, `gusnet predict`, `gusnet export`.
+```bash
+gusnet train --root datasets/mydata --val-split val --val-interval 5 ...
+```
+
+Checkpoints land in `runs/train/` as `last.pt` (resumable) and `best.pt`
+(deployable, EMA weights, no optimiser state). Score a checkpoint at any time:
+
+```bash
+gusnet val --root datasets/mydata --weights runs/train/best.pt --imgsz 640
+```
+
+```
+images 24  objects 87  detections 5092
+mAP50-95 0.2790   mAP50 0.7471   mAP75 0.1518
+precision 1.0000   recall 0.7826
+```
+
+Not implemented yet: `gusnet predict`, `gusnet export`.
 
 ### Diagnostics
 
@@ -171,10 +188,19 @@ history = Trainer(model, dataset, config).train()
 It runs warmup, cosine decay, an EMA of the weights, mixed precision, gradient
 clipping, and switches mosaic off for the final epochs.
 
+And evaluation, implemented from the definition rather than imported:
+
+```python
+from gusnet.eval import EvalConfig, evaluate
+
+result = evaluate(model, val_dataset, EvalConfig(img_size=640, device="cuda"))
+result.map50_95, result.map50, result.ap_per_class
+```
+
 Verified end to end: the test suite overfits a single image from scratch and
-checks the most confident box lands on the object, and a 40-epoch run on a
-small synthetic dataset reaches a mean best-IoU of 0.71 with 93% of objects
-found at IoU > 0.5.
+checks the most confident box lands on the object, and an oracle model that
+reports the ground truth exactly must score mAP 1.0 through the real evaluation
+loop.
 
 ## Documentation
 

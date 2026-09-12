@@ -104,11 +104,30 @@ caixa, como distribuição discreta (DFL) em vez de regressão direta.
 > próprios pesos (à prova de escala), com fallback uniforme se os pesos
 > degenerarem. Loss inicial passou de 0.0004 (falso zero) para 11.1.
 
-### Fase 7 — Avaliação
-- [ ] NMS via `torchvision.ops.batched_nms`
-- [ ] mAP COCO via `pycocotools`
-- [ ] CLI `gusnet val`
-- [ ] sanidade: COCO128 / VOC antes de queimar GPU no COCO completo
+### Fase 7 — Avaliação ✅
+- [x] NMS via `torchvision.ops.batched_nms` — por classe, com modo
+      class-agnostic e multi-label
+- [x] **mAP implementada do zero** (não via pycocotools): curva P/R, precisão
+      interpolada à direita, 101 pontos de recall, 10 thresholds de IoU 0.50:0.95
+- [x] `MeanAveragePrecision` com regras COCO: uma detecção por objeto, classe
+      tem que bater, classe sem ground truth não entra na média
+- [x] `evaluate()` força `augment=False` e mapeia predições **e** ground truth
+      de volta às coordenadas originais antes de casar
+- [x] validação dentro do treino: `best.pt` escolhido por mAP, não por loss
+- [x] CLI `gusnet val`
+- [x] teste com modelo-oráculo (reporta o ground truth exato) → mAP 1.0,
+      o que prova a contabilidade de coordenadas do avaliador
+
+> **Bug encontrado aqui.** Ao ligar a validação no trainer, a primeira execução
+> terminou com `best mAP50-95 11.1202` — mAP acima de 1, impossível. Com
+> `val_interval=5`, as épocas sem validação caíam num fallback para a loss de
+> treino, e maximizar misturava duas escalas: a loss 11.12 da época 1 ganhava de
+> qualquer mAP real. Corrigido: época sem validação não concorre a `best.pt`.
+
+> Resultado no dataset sintético (GUSNet-n, 40 épocas, 160px, 24 imagens):
+> **mAP50 0.747, mAP50-95 0.279, precision 1.00, recall 0.78**. O vão entre
+> mAP50 e mAP50-95 diz exatamente o que se espera: acha os objetos, mas as
+> caixas não são justas.
 
 ### Fase 8 — Inferência e export
 - [ ] `gusnet predict` (imagem, pasta, vídeo)

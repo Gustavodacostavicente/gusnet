@@ -32,6 +32,7 @@ from torch import nn
 from torch.utils.data import DataLoader
 
 from gusnet.data import DetectionDataset, build_dataloader
+from gusnet.eval import EvalConfig, evaluate
 from gusnet.losses import DetectionLoss
 from gusnet.train.checkpoint import save_checkpoint
 from gusnet.train.ema import ModelEMA
@@ -79,6 +80,13 @@ class TrainConfig:
             early -- especially the classification prior -- so they are allowed
             to move while the weights are still ramping up.
         close_mosaic: epochs at the end with mosaic and mixup disabled.
+        val_interval: epochs between validations, when a validation set is
+            given. Validation costs a full pass over that set, so on a large
+            one it is worth doing every few epochs rather than every epoch.
+        eval_conf_threshold: confidence floor during validation. Deliberately
+            near zero: mAP integrates the whole precision/recall curve, and a
+            high threshold truncates it and under-reports the metric.
+        eval_iou_threshold: NMS overlap threshold during validation.
         grad_clip: maximum gradient norm, or ``None``.
         amp: use mixed precision when CUDA is available.
         ema_decay: asymptotic decay of the weight average.
@@ -111,6 +119,10 @@ class TrainConfig:
     ema_decay: float = 0.9999
     ema_tau: float = 2000.0
 
+    val_interval: int = 1
+    eval_conf_threshold: float = 0.001
+    eval_iou_threshold: float = 0.7
+
     workers: int = 0
     device: str = "auto"
     seed: int = 0
@@ -138,9 +150,13 @@ class Trainer:
         criterion: the objective. Defaults to
             :class:`~gusnet.losses.detection.DetectionLoss` for the model's
             class count.
+        val_dataset: optional validation set. When given, ``best.pt`` is
+            selected by mAP instead of by training loss -- which is the only
+            honest way to choose a checkpoint, since training loss keeps
+            falling long after generalisation has stopped improving.
 
     Attributes:
-        history: one dict of averaged loss terms per completed epoch.
+        history: one dict of per-epoch metrics.
     """
 
     def __init__(
@@ -150,8 +166,10 @@ class Trainer:
         config: TrainConfig | None = None,
         *,
         criterion: nn.Module | None = None,
+        val_dataset: DetectionDataset | None = None,
     ) -> None:
         self.config = config or TrainConfig()
+        self.val_dataset = val_dataset
         self.device = self.config.resolved_device()
 
         seed_everything(self.config.seed)
@@ -196,9 +214,16 @@ class Trainer:
             f"amp {'on' if self.amp_enabled else 'off'}"
         )
 
+        # Without a validation set the only signal available is training loss,
+        # which keeps falling long after the model has stopped generalising.
+        # It is a placeholder, and `score` says which of the two is in use.
+        maximise = self.val_dataset is not None
+        best = -float("inf") if maximise else float("inf")
+
         for epoch in range(config.epochs):
             self._maybe_close_mosaic(epoch)
             metrics = self._train_one_epoch(epoch, warmup_iterations)
+            metrics.update(self._maybe_validate(epoch))
             self.history.append(metrics)
 
             save_checkpoint(
@@ -210,8 +235,15 @@ class Trainer:
                 metrics=metrics,
                 config=config.as_dict(),
             )
-            if metrics["total"] < best:
-                best = metrics["total"]
+
+            # When validating, only epochs that actually produced a mAP can
+            # compete for `best`. Falling back to the training loss on the
+            # others would compare two quantities on different scales and let
+            # a large early loss win a maximisation.
+            score = metrics.get("mAP50-95") if maximise else metrics["total"]
+            improved = score is not None and (score > best if maximise else score < best)
+            if improved:
+                best = score
                 save_checkpoint(
                     save_dir / "best.pt",
                     self.model,
@@ -221,8 +253,42 @@ class Trainer:
                     config=config.as_dict(),
                 )
 
-        print(f"done. checkpoints in {save_dir}")
+        label = "mAP50-95" if maximise else "training loss"
+        print(f"done. best {label} {best:.4f}. checkpoints in {save_dir}")
         return self.history
+
+    def _maybe_validate(self, epoch: int) -> dict[str, float]:
+        """Score the averaged weights on the validation set, if there is one.
+
+        The EMA copy is evaluated rather than the live model: it is the one
+        that will be deployed, and early in training its BatchNorm statistics
+        are the more settled of the two.
+        """
+        config = self.config
+        if self.val_dataset is None:
+            return {}
+        last_epoch = epoch == config.epochs - 1
+        if not last_epoch and (epoch + 1) % max(config.val_interval, 1):
+            return {}
+
+        result = evaluate(
+            self.ema.ema,
+            self.val_dataset,
+            EvalConfig(
+                batch_size=config.batch_size,
+                img_size=config.img_size,
+                conf_threshold=config.eval_conf_threshold,
+                iou_threshold=config.eval_iou_threshold,
+                workers=config.workers,
+                device=str(self.device),
+                verbose=False,
+            ),
+        )
+        print(
+            f"  val  mAP50-95 {result.map50_95:.4f}  mAP50 {result.map50:.4f}  "
+            f"P {result.precision:.3f}  R {result.recall:.3f}"
+        )
+        return result.items()
 
     def _train_one_epoch(self, epoch: int, warmup_iterations: int) -> dict[str, float]:
         self.model.train()
