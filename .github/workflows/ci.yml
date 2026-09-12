@@ -14,6 +14,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
         python-version: ["3.10", "3.12"]
+    env:
+      # Pin the interpreter for every uv invocation in this job. Without it a
+      # later `uv run` quietly rebuilds the environment on a different Python.
+      UV_PYTHON: ${{ matrix.python-version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -23,15 +27,17 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --extra dev --python ${{ matrix.python-version }}
+        run: uv sync --extra dev
 
+      # Every `uv run` re-syncs the environment to match the extras it is given,
+      # so the extras have to be repeated or the dev tools are uninstalled.
       - name: Lint
         run: |
-          uv run ruff check .
-          uv run ruff format --check .
+          uv run --extra dev ruff check .
+          uv run --extra dev ruff format --check .
 
       - name: Test
-        run: uv run pytest --cov=gusnet --cov-report=term-missing
+        run: uv run --extra dev pytest --cov=gusnet --cov-report=term-missing
 
   license-headers:
     runs-on: ubuntu-latest
