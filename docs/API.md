@@ -615,8 +615,9 @@ export_onnx(model, path, *, img_size=640, opset=17, dynamic_batch=False,
             max_det=300) -> Path
 ```
 
-Requires the `export` extra. `dynamic_batch` and `nms` cannot be combined.
-Agrees with PyTorch to about `1e-5`.
+Requires the `export` extra, which needs Python 3.11 or newer — the ONNX
+toolchain has dropped 3.10 wheels. `dynamic_batch` and `nms` cannot be
+combined. Agrees with PyTorch to about `1e-5`.
 
 ### `benchmark`
 

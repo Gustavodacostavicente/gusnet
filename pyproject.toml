@@ -29,7 +29,14 @@ dependencies = [
 [project.optional-dependencies]
 eval = ["pycocotools>=2.0.7"]
 # onnxscript is required by torch's current ONNX exporter, not optional.
-export = ["onnx>=1.16", "onnxruntime>=1.18", "onnxscript>=0.2"]
+# The ONNX toolchain has dropped Python 3.10 wheels, so the marker keeps the
+# extra installable there -- it simply resolves to nothing, and the ONNX tests
+# skip themselves. The rest of GUSNet still supports 3.10.
+export = [
+    'onnx>=1.16; python_version >= "3.11"',
+    'onnxruntime>=1.18; python_version >= "3.11"',
+    'onnxscript>=0.2; python_version >= "3.11"',
+]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",

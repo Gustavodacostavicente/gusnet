@@ -117,7 +117,8 @@ gusnet export    --weights best.pt --format onnx --nms            # NMS in the g
 gusnet benchmark --weights best.pt --imgsz 640 --batch-size 1
 ```
 
-TorchScript exports are bit-exact with PyTorch; ONNX agrees to about `1e-5`.
+TorchScript exports are bit-exact with PyTorch; ONNX agrees to about `1e-5`
+and needs the `export` extra (`uv sync --extra export`, Python 3.11+).
 With `--nms` the detection count stays genuinely dynamic in both formats — which
 is harder than it sounds, and is
 [explained here](docs/ARCHITECTURE.md#10-inference-and-export).
