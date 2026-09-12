@@ -3,7 +3,7 @@
 > **Este é o arquivo que diz onde paramos.** Leia antes de começar qualquer
 > coisa; atualize antes de commitar. Um status desatualizado é pior que nenhum.
 >
-> Última atualização: **2026-09-13**
+> Última atualização: **2026-09-13** (treino COCO em andamento)
 
 ---
 
@@ -38,21 +38,29 @@ O pipeline fecha; o número é baixo porque a corrida foi curta.
 
 ## Pendências, por prioridade
 
-### 🔴 1. Baixar `train2017` e rodar o treino completo
+### 🔴 1. A corrida COCO — **em andamento**
 
-19 GB de imagens (as anotações de treino **já estão** em
-`H:/datasets/coco/annotations/instances_train2017.json`, vieram no mesmo zip).
+COCO 2017 completo está em `H:/datasets/coco` (118.287 imagens de treino,
+849.947 objetos, 21 GB). **Os datasets ficam no `H:`** — 98 GB, quase vazio;
+o `C:` está em 99% e o `E:` em 94%, e o `G:` é onde mora o repositório.
 
-```bash
-python scripts/download_coco.py --split train2017 --root H:/datasets/coco
+Corrida disparada em 2026-09-13:
+
+```
+GUSNet-s, 640px, batch 16, SGD lr0 0.01, 100 épocas
+warmup 3, close-mosaic 15, validação no val2017 a cada 5 épocas
+workers 4, AMP, saída em H:/datasets/coco-runs/s-100
 ```
 
-**Os datasets ficam no `H:`** — 98 GB, praticamente vazio. O `C:` está em 99% e
-o `E:` em 94%; o `G:` tem espaço mas é onde mora o repositório.
+Estimativa: **~1.9 dias**. Acompanhar com
+`Get-Content H:\datasets\coco-runs\s-100	rain.log -Tail 5`.
 
-Comando do treino em [`TRAINING.md`](TRAINING.md#7-running-the-real-thing).
-Sugestão de primeira tentativa: **GUSNet-s, 100 épocas, batch 16** ≈ 1.9 dias,
-em vez das 300 épocas ≈ 5.6 dias. Se cair, `--resume` retoma de onde parou.
+**Se cair**, retomar com o mesmo comando mais `--resume` — está tudo em
+`TRAINING.md` §6. Não recomeçar do zero.
+
+Quando terminar: rodar `gusnet val` no `best.pt` contra o val2017 completo,
+anotar o mAP aqui, e preencher o `MODEL_CARD.md` (item 3) antes de publicar
+qualquer peso.
 
 ### 🟠 2. Liberar espaço no `C:`
 
