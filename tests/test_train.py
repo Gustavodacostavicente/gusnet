@@ -374,3 +374,177 @@ def test_trainer_validates_on_the_last_epoch_regardless_of_interval(
     history = Trainer(model, dataset, config, val_dataset=dataset).train()
     assert "mAP50-95" in history[-1]
     assert "mAP50-95" not in history[0]
+
+
+# ------------------------------------------------------------------- resuming
+
+
+def _dataset(folder_dataset: Path, augment: bool = False) -> DetectionDataset:
+    return DetectionDataset.from_folder(
+        folder_dataset, "train", img_size=64, augment=augment, seed=0
+    )
+
+
+def test_resume_continues_at_the_next_epoch(folder_dataset: Path, tmp_path: Path):
+    dataset = _dataset(folder_dataset)
+    config = _short_config(tmp_path, epochs=3)
+    first = Trainer(GUSNet.from_variant("n", num_classes=dataset.num_classes), dataset, config)
+    first.train()
+
+    config = _short_config(tmp_path, epochs=6)
+    second = Trainer(
+        GUSNet.from_variant("n", num_classes=dataset.num_classes),
+        dataset,
+        config,
+        resume=config.save_dir / "last.pt",
+    )
+    history = second.train()
+
+    assert len(history) == 3, "should run only the remaining epochs"
+    assert load_checkpoint(config.save_dir / "last.pt")["epoch"] == 5
+
+
+def test_resume_restores_the_iteration_counter(folder_dataset: Path, tmp_path: Path):
+    """Otherwise warmup runs again, dropping an already-trained model to lr 0.
+
+    This is the failure that makes a naive resume worse than no resume: the
+    weights come back, the schedule does not, and the first epochs after
+    restarting undo progress instead of continuing it.
+    """
+    dataset = _dataset(folder_dataset)
+    config = _short_config(tmp_path, epochs=4, warmup_epochs=10.0)
+    first = Trainer(GUSNet.from_variant("n", num_classes=dataset.num_classes), dataset, config)
+    first.train()
+    assert first._step > 0
+
+    config = _short_config(tmp_path, epochs=8, warmup_epochs=10.0)
+    second = Trainer(
+        GUSNet.from_variant("n", num_classes=dataset.num_classes),
+        dataset,
+        config,
+        resume=config.save_dir / "last.pt",
+    )
+    assert second._step == first._step
+
+    # The learning rate picks up along the ramp rather than at its start.
+    warmup = int(10.0 * len(second.loader))
+    second._apply_schedule(4, warmup)
+    assert second.optimizer.param_groups[0]["lr"] > 0.0
+
+
+def test_resume_restores_the_ema_and_optimizer_state(folder_dataset: Path, tmp_path: Path):
+    dataset = _dataset(folder_dataset)
+    config = _short_config(tmp_path, epochs=3)
+    first = Trainer(GUSNet.from_variant("n", num_classes=dataset.num_classes), dataset, config)
+    first.train()
+
+    config = _short_config(tmp_path, epochs=6)
+    second = Trainer(
+        GUSNet.from_variant("n", num_classes=dataset.num_classes),
+        dataset,
+        config,
+        resume=config.save_dir / "last.pt",
+    )
+
+    assert second.ema.updates == first.ema.updates
+    assert torch.allclose(
+        second.ema.ema.backbone.stem.conv.weight, first.ema.ema.backbone.stem.conv.weight
+    )
+    # AdamW's moment estimates survive: restarting them costs real progress.
+    assert second.optimizer.state_dict()["state"], "optimizer state is empty"
+
+
+def test_resume_keeps_the_best_score(folder_dataset: Path, tmp_path: Path):
+    """A mediocre first epoch after resuming must not overwrite a good best.pt."""
+    dataset = _dataset(folder_dataset)
+    config = _short_config(tmp_path, epochs=3)
+    first = Trainer(GUSNet.from_variant("n", num_classes=dataset.num_classes), dataset, config)
+    first.train()
+
+    config = _short_config(tmp_path, epochs=6)
+    second = Trainer(
+        GUSNet.from_variant("n", num_classes=dataset.num_classes),
+        dataset,
+        config,
+        resume=config.save_dir / "last.pt",
+    )
+    assert second._best == pytest.approx(first._best)
+
+
+def test_resume_refuses_a_finished_run(folder_dataset: Path, tmp_path: Path):
+    dataset = _dataset(folder_dataset)
+    config = _short_config(tmp_path, epochs=3)
+    Trainer(GUSNet.from_variant("n", num_classes=dataset.num_classes), dataset, config).train()
+
+    with pytest.raises(SystemExit, match="already finished epoch"):
+        Trainer(
+            GUSNet.from_variant("n", num_classes=dataset.num_classes),
+            dataset,
+            _short_config(tmp_path, epochs=3),
+            resume=config.save_dir / "last.pt",
+        )
+
+
+def test_resume_from_a_missing_checkpoint_is_a_clear_error(folder_dataset: Path, tmp_path: Path):
+    with pytest.raises(FileNotFoundError, match="no checkpoint at"):
+        Trainer(
+            GUSNet.from_variant("n", num_classes=2),
+            _dataset(folder_dataset),
+            _short_config(tmp_path),
+            resume=tmp_path / "nope.pt",
+        )
+
+
+def test_a_resumed_run_matches_an_uninterrupted_one(folder_dataset: Path, tmp_path: Path):
+    """Six epochs straight through, against three plus three.
+
+    Not bit-exact -- the dataloader's shuffling restarts -- but the loss after
+    resuming must be in the same region, not back where training began.
+    """
+    straight = Trainer(
+        GUSNet.from_variant("n", num_classes=2),
+        _dataset(folder_dataset, augment=True),
+        _short_config(tmp_path / "straight", epochs=6),
+    ).train()
+
+    split_config = _short_config(tmp_path / "split", epochs=3)
+    Trainer(
+        GUSNet.from_variant("n", num_classes=2),
+        _dataset(folder_dataset, augment=True),
+        split_config,
+    ).train()
+
+    resumed = Trainer(
+        GUSNet.from_variant("n", num_classes=2),
+        _dataset(folder_dataset, augment=True),
+        _short_config(tmp_path / "split", epochs=6),
+        resume=split_config.save_dir / "last.pt",
+    ).train()
+
+    assert resumed[-1]["total"] < straight[0]["total"], "resuming threw away the progress"
+
+
+def test_resume_estimates_the_counters_for_an_old_checkpoint(folder_dataset: Path, tmp_path: Path):
+    """Checkpoints written before the counters existed must not restart warmup.
+
+    Starting at step zero would run the warmup ramp again over an already
+    trained model and restart the EMA's decay ramp. The epoch number is enough
+    to estimate both, and estimating beats resetting.
+    """
+    dataset = _dataset(folder_dataset)
+    config = _short_config(tmp_path, epochs=3)
+    Trainer(GUSNet.from_variant("n", num_classes=dataset.num_classes), dataset, config).train()
+
+    # Strip the bookkeeping, as an older checkpoint would have it.
+    path = config.save_dir / "last.pt"
+    payload = torch.load(path, map_location="cpu", weights_only=True)
+    payload["training_state"] = {}
+    torch.save(payload, path)
+
+    config = _short_config(tmp_path, epochs=6)
+    resumed = Trainer(
+        GUSNet.from_variant("n", num_classes=dataset.num_classes), dataset, config, resume=path
+    )
+
+    assert resumed._step == 3 * len(resumed.loader)
+    assert resumed.ema.updates == resumed._step

@@ -2,7 +2,7 @@
 
 Everything in [`ARCHITECTURE.md`](ARCHITECTURE.md) describes how the code works.
 This describes what actually happens when you point it at COCO on one consumer
-GPU — the setup, the measured numbers, and the four things that went wrong the
+GPU — the setup, the measured numbers, and the things that went wrong the
 first time.
 
 All figures here were measured on an **NVIDIA RTX 3060 12 GB**, Windows 10,
@@ -114,7 +114,7 @@ started*, not *good*. Eighty classes over 512 photographs in 100 epochs is a
 much harder memorisation problem than the synthetic three-shape set, which
 reached mAP50 0.75 in 40 epochs. Nothing here substitutes for the real run.
 
-## 5. Four things that went wrong
+## 5. Things that went wrong
 
 Each of these cost time, and none of them announced itself.
 
@@ -166,7 +166,45 @@ torch's exporter prints a check mark, a legacy Windows console cannot encode it,
 and the `UnicodeEncodeError` takes down the command *after* the export has
 already succeeded. The CLI now forces UTF-8 with replacement on its streams.
 
-## 6. Running the real thing
+## 6. Resuming
+
+```bash
+.venv/Scripts/gusnet train ... --resume                    # <save-dir>/last.pt
+.venv/Scripts/gusnet train ... --resume path/to/last.pt    # or an explicit file
+```
+
+A six-day run will be interrupted. What comes back is not only the weights:
+
+| Restored | Because otherwise |
+|---|---|
+| optimizer state | SGD momentum and Adam's moments are worth epochs of progress |
+| iteration counter | the warmup ramp runs **again**, taking a trained model back to a near-zero learning rate |
+| EMA update count | the decay ramp restarts, and the average briefly tracks the live weights as if nothing had been learned |
+| AMP scaler | it has converged on a scale factor suited to this model's gradients |
+| best score | a mediocre first epoch after resuming would overwrite a good `best.pt` |
+
+Whether mosaic is closed is deliberately *not* restored — it is derived from the
+epoch number, so resuming into the tail of a schedule closes it on its own.
+
+Verified on the GPU by running six epochs straight through and comparing
+against three plus a resume:
+
+| Epoch | Straight | Split + resume | Learning rate |
+|---|---|---|---|
+| 4 | 7.2398 | 7.5341 | 0.00051 (both) |
+| 5 | 7.1133 | 7.2754 | 0.00026 (both) |
+| 6 | 7.0409 | 7.1131 | 0.00008 (both) |
+
+**The learning rates match exactly**, which is the schedule being correctly
+restored. The losses do not match to the digit, and should not: the dataloader's
+shuffling and the augmentation stream restart, so the two runs see different
+crops after the split. What matters is that the resumed run continues from where
+it was rather than from the beginning.
+
+A checkpoint written before these counters existed still resumes: they are
+estimated from the epoch number, which beats resetting them to zero.
+
+## 7. Running the real thing
 
 ```bash
 python scripts/download_coco.py --split train2017
@@ -192,5 +230,5 @@ Notes for a run of that length:
 * **SGD is the default** and is the right choice at this length; AdamW converges
   faster on short schedules and small data, which is why the smoke test above
   uses it.
-* **Resuming is not wired up yet.** The state is in `last.pt`, the flag is not
-  there. On a six-day run that is a gap worth closing before you start.
+* **If it stops, resume it.** `--resume` picks up from `last.pt` at the next
+  epoch with everything restored — see below.

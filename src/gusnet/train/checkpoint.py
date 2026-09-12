@@ -30,6 +30,7 @@ def save_checkpoint(
     epoch: int = 0,
     metrics: dict[str, float] | None = None,
     config: dict[str, Any] | None = None,
+    training_state: dict[str, Any] | None = None,
 ) -> Path:
     """Write a checkpoint.
 
@@ -43,6 +44,11 @@ def save_checkpoint(
         epoch: the epoch just completed.
         metrics: whatever was measured, for the record.
         config: the training configuration, for reproducibility.
+        training_state: the loop's own bookkeeping -- iteration count, the EMA's
+            update count, the AMP scaler, the best score so far. Weights and
+            optimizer alone do not make a run resumable: restart with the
+            iteration count at zero and the warmup schedule runs again over an
+            already-trained model, which is worse than not resuming at all.
 
     Returns:
         The path written.
@@ -58,6 +64,7 @@ def save_checkpoint(
         "model_args": _model_args(model),
         "metrics": metrics or {},
         "config": config or {},
+        "training_state": training_state or {},
     }
     if ema is not None:
         payload["ema"] = ema.state_dict()

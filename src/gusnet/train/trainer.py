@@ -34,7 +34,7 @@ from torch.utils.data import DataLoader
 from gusnet.data import DetectionDataset, build_dataloader
 from gusnet.eval import EvalConfig, evaluate
 from gusnet.losses import DetectionLoss
-from gusnet.train.checkpoint import save_checkpoint
+from gusnet.train.checkpoint import load_checkpoint, save_checkpoint
 from gusnet.train.ema import ModelEMA
 from gusnet.train.optim import build_optimizer, cosine_schedule, warmup_factor
 
@@ -154,6 +154,9 @@ class Trainer:
             selected by mAP instead of by training loss -- which is the only
             honest way to choose a checkpoint, since training loss keeps
             falling long after generalisation has stopped improving.
+        resume: a ``last.pt`` to continue from. The run picks up at the
+            following epoch with the optimizer, the weight average, the AMP
+            scaler and the iteration counter all restored.
 
     Attributes:
         history: one dict of per-epoch metrics.
@@ -167,6 +170,7 @@ class Trainer:
         *,
         criterion: nn.Module | None = None,
         val_dataset: DetectionDataset | None = None,
+        resume: str | Path | None = None,
     ) -> None:
         self.config = config or TrainConfig()
         self.val_dataset = val_dataset
@@ -195,6 +199,69 @@ class Trainer:
         self.history: list[dict[str, float]] = []
         self._mosaic_open = True
         self._step = 0
+        self._start_epoch = 0
+        self._maximise = self.val_dataset is not None
+        self._best = -float("inf") if self._maximise else float("inf")
+
+        if resume is not None:
+            self._resume_from(resume)
+
+    def _resume_from(self, path: str | Path) -> None:
+        """Restore a run from a checkpoint written by :meth:`train`.
+
+        Everything the loop carries between epochs comes back, not just the
+        weights:
+
+        * the **optimizer state**, because SGD momentum and Adam's moment
+          estimates are worth several epochs of progress on their own;
+        * the **EMA update count**, since the decay ramps in over it -- restored
+          at zero, the average would briefly track the live weights as if
+          training had just started;
+        * the **iteration counter**, or the warmup would run again, taking an
+          already-trained model back down to a near-zero learning rate;
+        * the **AMP scaler**, which has converged on a scale factor that suits
+          this model's gradients;
+        * the **best score**, so a mediocre first epoch after resuming does not
+          overwrite a good ``best.pt``.
+
+        Whether mosaic is closed is deliberately *not* restored: it is derived
+        from the epoch number, so resuming into the tail of a schedule closes it
+        on its own.
+        """
+        checkpoint = load_checkpoint(path, map_location=self.device)
+
+        self.model.load_state_dict(checkpoint["model"])
+        if "ema" in checkpoint:
+            self.ema.ema.load_state_dict(checkpoint["ema"])
+        if "optimizer" in checkpoint:
+            self.optimizer.load_state_dict(checkpoint["optimizer"])
+
+        self._start_epoch = int(checkpoint.get("epoch", -1)) + 1
+
+        # A checkpoint written before this bookkeeping existed has no counters.
+        # Deriving them from the epoch is far better than starting at zero: at
+        # zero the warmup schedule runs again over a trained model, and the
+        # EMA's decay ramp restarts, so the average briefly tracks the live
+        # weights as if nothing had been learned.
+        state = checkpoint.get("training_state") or {}
+        estimated = self._start_epoch * max(len(self.loader), 1)
+        self._step = int(state.get("step", estimated))
+        self.ema.updates = int(state.get("ema_updates", estimated))
+        if self.amp_enabled and state.get("scaler"):
+            self.scaler.load_state_dict(state["scaler"])
+        if state.get("best") is not None:
+            self._best = float(state["best"])
+
+        if self._start_epoch >= self.config.epochs:
+            raise SystemExit(
+                f"{path} already finished epoch {self._start_epoch} of "
+                f"{self.config.epochs}; raise --epochs to continue training"
+            )
+
+        print(
+            f"resumed from {path}: starting at epoch {self._start_epoch + 1}, "
+            f"step {self._step}, ema updates {self.ema.updates}"
+        )
 
     # ---------------------------------------------------------------- the loop
 
@@ -206,26 +273,39 @@ class Trainer:
 
         steps_per_epoch = max(len(self.loader), 1)
         warmup_iterations = int(config.warmup_epochs * steps_per_epoch)
-        best = float("inf")
-
-        print(
-            f"training on {self.device} | {len(self.dataset)} images | "
-            f"{config.epochs} epochs | batch {config.batch_size} | "
-            f"amp {'on' if self.amp_enabled else 'off'}"
-        )
 
         # Without a validation set the only signal available is training loss,
         # which keeps falling long after the model has stopped generalising.
         # It is a placeholder, and `score` says which of the two is in use.
-        maximise = self.val_dataset is not None
-        best = -float("inf") if maximise else float("inf")
+        maximise = self._maximise
 
-        for epoch in range(config.epochs):
+        print(
+            f"training on {self.device} | {len(self.dataset)} images | "
+            f"epochs {self._start_epoch + 1}-{config.epochs} | "
+            f"batch {config.batch_size} | amp {'on' if self.amp_enabled else 'off'}"
+        )
+
+        for epoch in range(self._start_epoch, config.epochs):
             self._maybe_close_mosaic(epoch)
             metrics = self._train_one_epoch(epoch, warmup_iterations)
             metrics.update(self._maybe_validate(epoch))
             self.history.append(metrics)
 
+            # When validating, only epochs that actually produced a mAP can
+            # compete for `best`. Falling back to the training loss on the
+            # others would compare two quantities on different scales and let
+            # a large early loss win a maximisation.
+            score = metrics.get("mAP50-95") if maximise else metrics["total"]
+            improved = score is not None and (
+                score > self._best if maximise else score < self._best
+            )
+            if improved:
+                self._best = score
+
+            # `best` is updated before last.pt is written, not after: the
+            # checkpoint has to record the best *including* this epoch, or a
+            # resumed run starts one epoch stale and can overwrite a good
+            # best.pt with a worse one.
             save_checkpoint(
                 save_dir / "last.pt",
                 self.model,
@@ -234,16 +314,9 @@ class Trainer:
                 epoch=epoch,
                 metrics=metrics,
                 config=config.as_dict(),
+                training_state=self._training_state(),
             )
-
-            # When validating, only epochs that actually produced a mAP can
-            # compete for `best`. Falling back to the training loss on the
-            # others would compare two quantities on different scales and let
-            # a large early loss win a maximisation.
-            score = metrics.get("mAP50-95") if maximise else metrics["total"]
-            improved = score is not None and (score > best if maximise else score < best)
             if improved:
-                best = score
                 save_checkpoint(
                     save_dir / "best.pt",
                     self.model,
@@ -254,8 +327,17 @@ class Trainer:
                 )
 
         label = "mAP50-95" if maximise else "training loss"
-        print(f"done. best {label} {best:.4f}. checkpoints in {save_dir}")
+        print(f"done. best {label} {self._best:.4f}. checkpoints in {save_dir}")
         return self.history
+
+    def _training_state(self) -> dict:
+        """The loop bookkeeping a resume needs, beyond weights and optimizer."""
+        return {
+            "step": self._step,
+            "ema_updates": self.ema.updates,
+            "scaler": self.scaler.state_dict() if self.amp_enabled else None,
+            "best": self._best,
+        }
 
     def _maybe_validate(self, epoch: int) -> dict[str, float]:
         """Score the averaged weights on the validation set, if there is one.

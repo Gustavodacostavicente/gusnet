@@ -62,7 +62,7 @@ Gustavo's setup: Windows 10, RTX 3060 12 GB, 12 CPU cores, `uv` for Python.
 ## Commands
 
 ```bash
-.venv/Scripts/python -m pytest            # 275 tests, ~55 s
+.venv/Scripts/python -m pytest            # 283 tests, ~70 s
 .venv/Scripts/python -m ruff check .      # lint
 .venv/Scripts/python -m ruff format .     # format (also formats code in .md)
 

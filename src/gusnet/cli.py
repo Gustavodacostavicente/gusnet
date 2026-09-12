@@ -96,6 +96,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--val-coco-images", type=Path, help="COCO validation images (defaults to --coco-images)"
     )
     train.add_argument("--val-interval", type=int, default=1, help="epochs between validations")
+    train.add_argument(
+        "--resume",
+        nargs="?",
+        const=True,
+        default=None,
+        metavar="CHECKPOINT",
+        help="continue a run; bare --resume uses <save-dir>/last.pt",
+    )
     train.set_defaults(no_augment=False)
 
     val = sub.add_parser("val", help="evaluate a checkpoint and report mAP")
@@ -382,8 +390,21 @@ def _train(args: argparse.Namespace) -> int:
         val_interval=args.val_interval,
     )
 
+    resume = args.resume
+    if resume is True:
+        resume = args.save_dir / "last.pt"
+        if not resume.is_file():
+            raise SystemExit(f"nothing to resume: {resume} does not exist")
+
     print(f"GUSNet-{args.model}: {model.num_parameters():,} parameters")
-    Trainer(model, dataset, config, criterion=criterion, val_dataset=val_dataset).train()
+    Trainer(
+        model,
+        dataset,
+        config,
+        criterion=criterion,
+        val_dataset=val_dataset,
+        resume=resume,
+    ).train()
     return 0
 
 

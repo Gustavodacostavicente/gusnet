@@ -597,6 +597,10 @@ for epoch:
   group's rate. The bias group starts *high* (0.1) and comes down to `lr0`:
   biases are the fastest thing a detector can usefully learn early, especially
   the classification prior, so they move while the weights are still ramping.
+* **Resuming** restores the optimizer, the EMA's update count, the AMP scaler
+  and the iteration counter, not just the weights. The counter is the one that
+  is easy to forget and expensive to lose: without it the warmup ramp runs again
+  over a trained model, which is worse than not resuming at all.
 
 ---
 
@@ -835,7 +839,7 @@ was found by looking at an image, not at a number.
 
 ## 13. Testing strategy
 
-275 tests. The ones worth knowing about are not the shape checks.
+283 tests. The ones worth knowing about are not the shape checks.
 
 **Round trips.** A box converted to another format and back must be identical;
 a box through letterbox and `scale_boxes` must return to where it started.

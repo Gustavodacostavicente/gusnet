@@ -485,7 +485,7 @@ Methods: `resolved_device()`, `as_dict()`.
 ### `Trainer`
 
 ```python
-Trainer(model, dataset, config=None, *, criterion=None, val_dataset=None)
+Trainer(model, dataset, config=None, *, criterion=None, val_dataset=None, resume=None)
 history = trainer.train()     # list of per-epoch metric dicts
 ```
 
@@ -493,6 +493,11 @@ Attributes: `model`, `ema`, `optimizer`, `loader`, `history`, `device`,
 `amp_enabled`, `val_dataset`. Each history entry holds `total`, `cls`, `box`,
 `dfl`, `fg`, `lr`, `seconds`, plus `mAP50-95`, `mAP50`, `mAP75`, `precision`
 and `recall` on epochs that were validated.
+
+`resume` takes a `last.pt` and continues at the following epoch with the
+optimizer, the weight average, the AMP scaler, the iteration counter and the
+best score restored. It refuses a checkpoint whose run already reached
+`config.epochs`.
 
 Writes `save_dir/last.pt` (with optimiser state, resumable) every epoch and
 `save_dir/best.pt` (EMA weights, deployable) when the model improves — by
@@ -524,15 +529,17 @@ weights), index 1 undecayed (norm weights and all biases).
 ### Checkpoints
 
 ```python
-save_checkpoint(path, model, *, ema=None, optimizer=None,
-                epoch=0, metrics=None, config=None) -> Path
+save_checkpoint(path, model, *, ema=None, optimizer=None, epoch=0,
+                metrics=None, config=None, training_state=None) -> Path
 load_checkpoint(path, map_location="cpu") -> dict
 model_from_checkpoint(path, *, prefer_ema=True, map_location="cpu") -> (model, checkpoint)
 ```
 
 A checkpoint contains `format`, `gusnet_version`, `epoch`, `model`,
-`model_args`, `metrics`, `config`, and optionally `ema` and `optimizer`.
-`model_args` is what lets the architecture be rebuilt without guessing.
+`model_args`, `metrics`, `config`, `training_state`, and optionally `ema` and
+`optimizer`. `model_args` is what lets the architecture be rebuilt without
+guessing; `training_state` (`step`, `ema_updates`, `scaler`, `best`) is what
+lets a run be resumed rather than merely restarted.
 
 ---
 
@@ -661,6 +668,7 @@ gusnet train        [data options] [--model {n,s,m,l,x}] [--epochs N]
                     [--assigner {tal,simota}] [--val-interval N]
                     [--val-split S]                        # folder datasets
                     [--val-coco-annotations JSON] [--val-coco-images DIR]
+                    [--resume [CHECKPOINT]]
                     [--workers N] [--device D] [--no-amp] [--seed N]
                     [--save-dir DIR] [--log-interval N]
 gusnet val          [data options] --weights PATH [--batch-size N] [--conf F]
