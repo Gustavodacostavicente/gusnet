@@ -48,8 +48,10 @@ on pull requests.
 
 Gustavo's setup: Windows 10, RTX 3060 12 GB, 12 CPU cores, `uv` for Python.
 
-* **`C:` is nearly full (~6 GB free).** Keep datasets, checkpoints and the uv
-  cache on `G:`. Set `UV_CACHE_DIR=G:/uv-cache` for anything that downloads.
+* **Drives.** `C:` is nearly full (~6 GB free) and `E:` nearly so; the repo is on
+  `G:` (~130 GB free) and **datasets live on `H:`** (`H:/datasets/coco`, ~95 GB
+  free and otherwise empty). Set `UV_CACHE_DIR=G:/uv-cache` for anything that
+  downloads, so package caches never land on `C:`.
 * **CUDA PyTorch must be installed explicitly**, and then `uv run` must be
   avoided: it re-syncs against the lock file and silently reinstalls the CPU
   build, even on an unrelated `uv run ruff check`. Use `.venv/Scripts/python`

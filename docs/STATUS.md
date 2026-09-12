@@ -41,11 +41,14 @@ O pipeline fecha; o número é baixo porque a corrida foi curta.
 ### 🔴 1. Baixar `train2017` e rodar o treino completo
 
 19 GB de imagens (as anotações de treino **já estão** em
-`G:/datasets/coco/annotations/instances_train2017.json`, vieram no mesmo zip).
+`H:/datasets/coco/annotations/instances_train2017.json`, vieram no mesmo zip).
 
 ```bash
-python scripts/download_coco.py --split train2017 --root G:/datasets/coco
+python scripts/download_coco.py --split train2017 --root H:/datasets/coco
 ```
+
+**Os datasets ficam no `H:`** — 98 GB, praticamente vazio. O `C:` está em 99% e
+o `E:` em 94%; o `G:` tem espaço mas é onde mora o repositório.
 
 Comando do treino em [`TRAINING.md`](TRAINING.md#7-running-the-real-thing).
 Sugestão de primeira tentativa: **GUSNet-s, 100 épocas, batch 16** ≈ 1.9 dias,
