@@ -4,10 +4,11 @@ A complete walkthrough of everything implemented, in the order the data moves
 through it. Every section says *what* the component does, *why* it is built that
 way, and *what breaks* if it is not.
 
-This is the design document. For the legal reasoning behind the project see
-[`LICENCIAMENTO.md`](LICENCIAMENTO.md) (Portuguese) and
-[`../PROVENANCE.md`](../PROVENANCE.md); for what is done and what is next, see
-[`ROADMAP.md`](ROADMAP.md).
+This is the design document. For what it costs to actually train on COCO, and
+the platform problems that showed up doing it, see [`TRAINING.md`](TRAINING.md).
+For the legal reasoning behind the project see [`LICENCIAMENTO.md`](LICENCIAMENTO.md)
+(Portuguese) and [`../PROVENANCE.md`](../PROVENANCE.md); for what is done and
+what is next, see [`ROADMAP.md`](ROADMAP.md).
 
 ---
 
@@ -834,7 +835,7 @@ was found by looking at an image, not at a number.
 
 ## 13. Testing strategy
 
-267 tests. The ones worth knowing about are not the shape checks.
+275 tests. The ones worth knowing about are not the shape checks.
 
 **Round trips.** A box converted to another format and back must be identical;
 a box through letterbox and `scale_boxes` must return to where it started.
@@ -949,6 +950,35 @@ legacy exporter for the ONNX equivalent. The lesson: when a function's output
 *shape* depends on its input *values*, tracing is not a safe way to capture it —
 and the failure mode is silence, so the test has to go looking.
 
+### Validation that validated on the training set
+
+Training on COCO, `--val-split` was accepted alongside COCO annotations and
+quietly built the validation set from the *training* annotations. The run then
+reported a memorisation score in the place a generalisation score belongs, and
+selected `best.pt` by it.
+
+That is the most expensive kind of wrong number, because nothing about it looks
+wrong: the metric is computed correctly, on real data, and it improves. Only the
+*source* is wrong, and the source was never printed.
+
+Fixed by making the two dataset formats take different flags and refusing the
+combination rather than guessing. The general point: when an argument can be
+silently ignored, the safe design is to reject it, not to fall back.
+
+### A first COCO run that hung with no error at all
+
+The first real training run reached its first validation and stopped — GPU at
+9%, no output, no exception, for eight minutes. The same validation run
+standalone took fifteen seconds.
+
+Inside training, the dataloader's persistent workers are alive when `evaluate()`
+spawns its own, and on Windows that deadlocks. In-training validation now runs
+single-process unconditionally, which it can afford to: there is no mosaic
+during evaluation, so each sample decodes one image instead of four.
+
+[`TRAINING.md`](TRAINING.md) has this one and the shared-memory exhaustion that
+followed it, with the numbers.
+
 ---
 
 ## 15. What comes next
@@ -956,10 +986,15 @@ and the failure mode is silence, so the test has to go looking.
 The eight-phase roadmap is complete: GUSNet reads data, trains, measures itself,
 runs on real inputs and exports to two runtimes.
 
-**The obvious next thing is weights.** Everything here has been verified on
-synthetic data and on overfitting a single image. A real COCO run is what turns
-this from a correct implementation into a usable detector, and nothing in the
-code can substitute for it.
+**The obvious next thing is weights.** The pipeline has now been run end to end
+on real COCO data — see [`TRAINING.md`](TRAINING.md) — and it closes: loss
+falls, mAP rises, checkpoints and validation work. But the run that proved it
+was twelve minutes on 512 images, and it ended at mAP50 0.026. A full schedule
+is about six days of GPU on one RTX 3060, and nothing short of it turns this
+from a correct implementation into a usable detector.
+
+**Resuming from `last.pt` should be wired up before that run starts.** The state
+is saved; the flag is not there. On a six-day job that is not a nicety.
 
 **Sensible after that:** multi-scale training; DDP for multi-GPU; resuming from
 `last.pt` (the state is saved, the flag is not wired); rectangular inference

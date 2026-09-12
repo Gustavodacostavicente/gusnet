@@ -88,7 +88,13 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--seed", type=int, default=0)
     train.add_argument("--save-dir", type=Path, default=Path("runs/train"))
     train.add_argument("--log-interval", type=int, default=10, help="0 to silence steps")
-    train.add_argument("--val-split", help="split to validate on, e.g. val")
+    train.add_argument("--val-split", help="folder datasets: split to validate on, e.g. val")
+    train.add_argument(
+        "--val-coco-annotations", type=Path, help="COCO datasets: instances json to validate on"
+    )
+    train.add_argument(
+        "--val-coco-images", type=Path, help="COCO validation images (defaults to --coco-images)"
+    )
     train.add_argument("--val-interval", type=int, default=1, help="epochs between validations")
     train.set_defaults(no_augment=False)
 
@@ -305,6 +311,37 @@ def _val(args: argparse.Namespace) -> int:
     return 0
 
 
+def _build_val_dataset(args: argparse.Namespace):
+    """Build the validation set, or return ``None`` if none was asked for.
+
+    The two dataset formats need different arguments, and mixing them up used to
+    be silent: passing ``--val-split`` alongside COCO annotations validated on
+    the *training* set, reporting a memorisation score as if it were
+    generalisation. Each combination is now either explicit or an error.
+    """
+    using_coco = args.coco_annotations is not None
+
+    if args.val_split and using_coco:
+        raise SystemExit(
+            "--val-split applies to folder datasets; for COCO use "
+            "--val-coco-annotations (with --val-coco-images if the directory differs)"
+        )
+    if args.val_coco_annotations and not using_coco:
+        raise SystemExit("--val-coco-annotations applies to COCO datasets; use --val-split")
+
+    if not args.val_split and not args.val_coco_annotations:
+        return None
+
+    val_args = argparse.Namespace(**vars(args))
+    val_args.no_augment = True
+    if using_coco:
+        val_args.coco_annotations = args.val_coco_annotations
+        val_args.coco_images = args.val_coco_images or args.coco_images
+    else:
+        val_args.split = args.val_split
+    return _build_dataset(val_args)
+
+
 def _train(args: argparse.Namespace) -> int:
     from gusnet.assign import SimOTAAssigner, TaskAlignedAssigner
     from gusnet.losses import DetectionLoss
@@ -323,13 +360,9 @@ def _train(args: argparse.Namespace) -> int:
     )
     criterion = DetectionLoss(dataset.num_classes, reg_max=model.head.reg_max, assigner=assigner)
 
-    val_dataset = None
-    if args.val_split:
-        val_args = argparse.Namespace(**vars(args))
-        val_args.split = args.val_split
-        val_args.no_augment = True
-        val_dataset = _build_dataset(val_args)
-        print(f"validating on {len(val_dataset)} images from split {args.val_split!r}")
+    val_dataset = _build_val_dataset(args)
+    if val_dataset is not None:
+        print(f"validating on {len(val_dataset)} images")
 
     config = TrainConfig(
         epochs=args.epochs,

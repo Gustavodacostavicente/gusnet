@@ -279,7 +279,14 @@ class Trainer:
                 img_size=config.img_size,
                 conf_threshold=config.eval_conf_threshold,
                 iou_threshold=config.eval_iou_threshold,
-                workers=config.workers,
+                # Deliberately single-process, and not inherited from the
+                # training config. Spawning dataloader workers while the
+                # training loader's persistent workers are still alive
+                # deadlocks on Windows -- observed hanging indefinitely at the
+                # first validation, with the GPU idle and no error. Validation
+                # does not need them anyway: there is no mosaic, so each sample
+                # decodes one image instead of four.
+                workers=0,
                 device=str(self.device),
                 verbose=False,
             ),

@@ -658,7 +658,9 @@ gusnet model-info   [--model {n,s,m,l,x}] [--classes N] [--imgsz N]
 gusnet train        [data options] [--model {n,s,m,l,x}] [--epochs N]
                     [--batch-size N] [--optimizer {sgd,adamw}] [--lr0 F]
                     [--weight-decay F] [--warmup-epochs F] [--close-mosaic N]
-                    [--assigner {tal,simota}] [--val-split S] [--val-interval N]
+                    [--assigner {tal,simota}] [--val-interval N]
+                    [--val-split S]                        # folder datasets
+                    [--val-coco-annotations JSON] [--val-coco-images DIR]
                     [--workers N] [--device D] [--no-amp] [--seed N]
                     [--save-dir DIR] [--log-interval N]
 gusnet val          [data options] --weights PATH [--batch-size N] [--conf F]
@@ -675,5 +677,23 @@ gusnet benchmark    [--weights PATH | --model {n,s,m,l,x} --classes N]
                     [--warmup N] [--device D] [--half]
 ```
 
+The validation source is format-specific and not interchangeable: folder
+datasets take `--val-split`, COCO datasets take `--val-coco-annotations`. Mixing
+them is an error rather than a silent fallback to the training set.
+
 `main(argv=None) -> int` is the entry point; `build_parser()` returns the
 `argparse.ArgumentParser` if you want to extend it.
+
+---
+
+## `scripts/download_coco.py`
+
+```bash
+python scripts/download_coco.py [--split {val2017,train2017}] [--root DIR]
+                                [--subset N] [--keep-zips]
+```
+
+Fetches COCO 2017 from `images.cocodataset.org`, extracts it, and optionally
+writes a reduced annotations file holding the first `N` images. Downloads land
+at a `.part` path and are renamed only on completion, so an interrupted
+transfer is never mistaken for a finished one.

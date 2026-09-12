@@ -11,10 +11,12 @@ own source closed, no paid license, no obligations beyond attribution.
 
 > **Status: complete and untrained.** Data pipeline, network, label assignment,
 > losses, training, COCO-style mAP evaluation, inference and export are all
-> implemented and tested — the eight-phase roadmap is done. What is missing is
-> a real training run: everything has been verified on synthetic data and by
-> overfitting single images, so **there are no released weights yet**. See
-> [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how it all works.
+> implemented and tested — the eight-phase roadmap is done, and the whole chain
+> has been run end to end on real COCO data. What is missing is a *long* run:
+> a full schedule is about six days of GPU on one RTX 3060, so **there are no
+> released weights yet**. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+> for how it works and [`docs/TRAINING.md`](docs/TRAINING.md) for what it
+> costs.
 
 ## Why this exists
 
@@ -63,11 +65,31 @@ cd gusnet
 uv sync --extra dev
 ```
 
-For CUDA training:
+For CUDA training, install the matching PyTorch build:
 
 ```bash
-uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+uv pip install --reinstall-package torch --reinstall-package torchvision     torch torchvision --index-url https://download.pytorch.org/whl/cu128
 ```
+
+> **Then stop using `uv run`.** It re-syncs the environment against the lock
+> file on every invocation, which silently reinstalls the CPU build of PyTorch
+> and leaves you wondering why `--device cuda` says *"Torch not compiled with
+> CUDA enabled"*. Call the entry point in the virtualenv directly instead —
+> `.venv\Scripts\gusnet` on Windows, `.venv/bin/gusnet` elsewhere — or pass
+> `uv run --no-sync`.
+
+## Getting COCO
+
+```bash
+python scripts/download_coco.py --split val2017                  # 1 GB, 5k images
+python scripts/download_coco.py --split train2017                # 19 GB, 118k images
+python scripts/download_coco.py --split val2017 --subset 512     # a smoke-test slice
+```
+
+Fetches from `images.cocodataset.org` directly. GUSNet does not redistribute
+COCO: the annotations are CC BY 4.0 and the images are Flickr-hosted under
+individual licences, so using them means accepting the
+[COCO terms of use](https://cocodataset.org/#termsofuse).
 
 ## Usage
 
@@ -226,6 +248,7 @@ keeping its detection count dynamic.
 | Document | What it covers |
 |---|---|
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | How everything works and why it is built that way — the full walkthrough, feature by feature |
+| [`docs/TRAINING.md`](docs/TRAINING.md) | Training on COCO for real: CUDA setup, measured cost on an RTX 3060, and the platform problems that showed up |
 | [`docs/API.md`](docs/API.md) | Every public class and function, with signatures and shapes |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | What is done, what is next (Portuguese) |
 | [`docs/LICENCIAMENTO.md`](docs/LICENCIAMENTO.md) | The licensing reasoning behind the project (Portuguese) |

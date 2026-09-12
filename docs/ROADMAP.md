@@ -175,9 +175,21 @@ AMP. Para m/l, usar accumulate de gradiente ou resolução menor.
 ## Ordem de validação
 
 1. overfit de 1 imagem (loss → ~0) — **feito, está na suíte de testes**
-2. COCO128, 100 épocas → mAP alto (memorização, prova que o pipeline fecha)
-3. VOC ou COCO subset
-4. COCO 2017 completo
+2. subconjunto COCO, 100 épocas → **feito**: 512 imagens de val2017, GUSNet-s,
+   12 min na RTX 3060. Loss 11.1 → 5.14, mAP50-95 0 → 0.0124, mAP50 0.0262.
+   O pipeline fecha em dados COCO reais; o número ainda é baixo porque 80
+   classes em 512 fotos e 100 épocas é pouco. Detalhes em `TRAINING.md`.
+3. COCO 2017 completo — **falta**, ~6 dias de GPU para 300 épocas do GUSNet-s
+
+## Custo real medido (RTX 3060 12 GB, 640px, AMP)
+
+| Modelo | Batch | img/s | VRAM | 1 época COCO | 100 épocas | 300 épocas |
+|---|---|---|---|---|---|---|
+| n | 32 | 83 | 4.0 GB | 24 min | 1.7 dias | 5.0 dias |
+| s | 16 | 74 | 4.3 GB | 27 min | 1.9 dias | 5.6 dias |
+| m | 8 | 16 | 3.2 GB | 124 min | 8.6 dias | 25.8 dias |
+
+Inferência: n 100 FPS, s 64 FPS, m 35 FPS (batch 1, 640px).
 
 ## Depois do roteiro
 
@@ -190,7 +202,8 @@ Depois disso, na ordem em que fariam mais diferença:
 
 - treino multi-escala
 - DDP para multi-GPU
-- retomar de `last.pt` (o estado é salvo, a flag não está ligada)
+- **retomar de `last.pt`** (o estado é salvo, a flag não está ligada) — numa
+  corrida de 6 dias isso deixa de ser luxo
 - assigner estático tipo ATSS no aquecimento, para o SimOTA ser usável desde o
   passo 1
 - conferir a mAP própria contra o `pycocotools` num teste opcional
