@@ -247,6 +247,7 @@ keeping its detection count dynamic.
 
 | Document | What it covers |
 |---|---|
+| [`docs/STATUS.md`](docs/STATUS.md) | Where the project stands and what is pending, by priority (Portuguese) |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | How everything works and why it is built that way — the full walkthrough, feature by feature |
 | [`docs/TRAINING.md`](docs/TRAINING.md) | Training on COCO for real: CUDA setup, measured cost on an RTX 3060, and the platform problems that showed up |
 | [`docs/API.md`](docs/API.md) | Every public class and function, with signatures and shapes |

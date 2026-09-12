@@ -1,5 +1,9 @@
 # Roteiro de desenvolvimento — GUSNet
 
+> As 8 fases abaixo estão **completas**. Para o que falta fazer agora, com
+> prioridades, veja [`STATUS.md`](STATUS.md) — é o arquivo vivo; este aqui é o
+> registro histórico de como o projeto foi construído.
+
 Notas de trabalho. Cada fase precisa rodar e ser testada antes da seguinte.
 Regra de procedência em `docs/LICENCIAMENTO.md`.
 
