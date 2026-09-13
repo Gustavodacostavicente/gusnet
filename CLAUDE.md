@@ -7,7 +7,9 @@ Instructions for Claude Code working on GUSNet. Read this first, every session.
 1. **Read [`docs/STATUS.md`](docs/STATUS.md)** before doing anything else. It is
    the living record of what is done, what is in progress, and what is pending,
    with priorities. Everything else in this file is stable background; that file
-   is the current state.
+   is the current state. Right now it says a COCO run is **paused mid-schedule**
+   and carries the exact command to resume it — that is almost certainly the
+   first thing to do.
 2. **Update `docs/STATUS.md` at the end of the session**, as part of the same
    commit as the work. A status file that lags the code is worse than none.
 3. Answer Gustavo in **Portuguese**. The code, the docstrings and the public
